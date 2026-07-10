@@ -33,7 +33,7 @@ def test_survives_reload(tmp_path):
     assert j2.has_pending("A@h:22")
 
 
-def test_corrupt_journal_recovers_on_next_record(tmp_path):
+def test_corrupt_journal_warns_and_recovers_on_next_record(tmp_path, caplog):
     p = tmp_path / "j.json"
     p.write_text("{broken", encoding="utf-8")
 
@@ -41,3 +41,4 @@ def test_corrupt_journal_recovers_on_next_record(tmp_path):
 
     entries = json.loads(p.read_text(encoding="utf-8"))
     assert [entry["path"] for entry in entries.values()] == ["/x"]
+    assert "権限ジャーナルを読み込めません" in caplog.text
