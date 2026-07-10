@@ -124,7 +124,10 @@ class ConnectWorker(QThread):
         except Exception as e:  # noqa: BLE001
             # 認証失敗時、保存済みが誤りだった可能性 → 使った保存済み認証情報を消す
             # (次回また同じ誤りで自動失敗し続けるのを防ぐ)
-            if self.credentials and "auth" in str(e).lower():
+            # ssh_core のエラーメッセージは日本語(「〜認証に失敗しました。」)なので
+            # "auth" だけでは一致しない。「認証」も見る。
+            msg = str(e).lower()
+            if self.credentials and ("auth" in msg or "認証" in msg):
                 for kind in self._saved_kinds:
                     self.credentials.delete(self.profile, kind)
                     logger.info("認証失敗のため保存済み %s を削除しました", kind)
