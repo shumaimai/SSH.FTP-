@@ -76,3 +76,26 @@ def test_auth_failure_keeps_non_auth_errors(qapp, monkeypatch):
 
     assert creds.deleted == []
     assert (profile.id_str(), "password") in creds.stored
+
+
+def test_auth_failure_japanese_message_clears_saved(qapp, monkeypatch):
+    """ssh_core の日本語エラー(「パスワード認証に失敗しました。」)でも削除が働く。"""
+    import hashi.mainwindow as mw
+
+    class JapaneseAuthFailSession:
+        def __init__(self, profile, known_hosts=None):
+            self.profile = profile
+
+        def connect(self, ui):
+            ui.get_secret("パスワードを入力")
+            raise Exception("パスワード認証に失敗しました。")
+
+    monkeypatch.setattr(mw, "SshSession", JapaneseAuthFailSession)
+
+    profile = Profile(host="h", port=22, username="u", auth_method=AUTH_PASSWORD)
+    creds = FakeCredentials({(profile.id_str(), "password"): "wrong"})
+    worker = mw.ConnectWorker(profile, KnownHosts(), creds)
+    worker.fail.connect(lambda _m: None)
+    worker.run()
+
+    assert "password" in creds.deleted
