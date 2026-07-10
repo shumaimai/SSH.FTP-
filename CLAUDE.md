@@ -135,7 +135,8 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
 
 - [x] **ポートフォワードの実機検証**(2026-07-10 完了。`tests/test_forward.py` 参照)。
 - [ ] リモート(-R)/ ダイナミック(-D)フォワード。
-- [ ] `~/.ssh/config` の読み込み(Host エイリアス、ProxyJump)。
+- [x] `~/.ssh/config` の読み込み(Host エイリアス。2026-07-10、`hashi/sshconfig.py`)。
+- [ ] ProxyJump / ProxyCommand(多段接続)。現状は検出したら `UnsupportedOption` で明示拒否。
 - [ ] 外部アプリで開いたファイルの変更監視 → 自動再アップロード(内蔵エディタは対応済み。
       「関連付けアプリで開く」経路が未対応)。
 - [ ] 転送キューの一覧 UI とレジューム。

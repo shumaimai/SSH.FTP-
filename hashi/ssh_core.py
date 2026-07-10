@@ -11,6 +11,7 @@ import socket
 
 import paramiko
 
+from . import sshconfig
 from .config import AUTH_AGENT, AUTH_KEY, KnownHosts, Profile
 
 
@@ -79,6 +80,11 @@ class SshSession:
         p = self.profile
         if not p.host:
             raise ConnectError("ホスト名を入力してください。")
+        # ~/.ssh/config の Host エイリアス解決(TOFU・認証も解決後の値で行う)
+        try:
+            p = self.profile = sshconfig.resolve_profile(p)
+        except sshconfig.UnsupportedOption as e:
+            raise ConnectError(str(e)) from e
         if not p.username:
             raise ConnectError("ユーザー名を入力してください。")
 
