@@ -1,7 +1,7 @@
-"""LocalForward のテスト。
+"""ポートフォワード (-L / -R / -D) のテスト。
 
-- ユニット: フェイク Transport(open_channel が実ソケットを返す)でポンプ部を検証。
-  ネットワーク不要なので CI で常に走る。
+- ユニット: フェイク Transport(open_channel/request_port_forward を模倣)で各フォワードの
+  起動・ポンプ・停止を検証。ネットワーク不要なので CI で常に走る。
 - 結合(ライブ): 実 sshd がある環境でのみ実行(HASHI_LIVE_SSH=1)。
   Issue #1 の実機検証を再現可能にしたもの。
 """
@@ -11,16 +11,17 @@ import os
 import select
 import socket
 import socketserver
+import struct
 import threading
 import time
 
 import pytest
 
-from hashi.forward import LocalForward
+from hashi.forward import DynamicForward, LocalForward, RemoteForward
 
 
 class FakeChannel:
-    """paramiko.Channel の代わり。実ソケットを direct-tcpip チャネルに見立てる。"""
+    """paramiko.Channel の代わり。実ソケットを SSH チャネルに見立てる。"""
 
     def __init__(self, sock: socket.socket):
         self._s = sock
@@ -35,6 +36,18 @@ class FakeChannel:
 
     def sendall(self, data):
         self._s.sendall(data)
+
+    def send(self, data):
+        return self._s.send(data)
+
+    def send_ready(self):
+        if self.closed:
+            return False
+        try:
+            _, w, _ = select.select([], [self._s], [], 0)
+        except OSError:
+            return False
+        return bool(w)
 
     def recv_ready(self):
         if self.closed:
@@ -56,11 +69,34 @@ class FakeChannel:
             pass
 
 
+class _RemoteHandler(socketserver.BaseRequestHandler):
+    """リモートフォワード用サーバー: 接続が来たら FakeTransport に登録されたハンドラへ渡す。"""
+
+    def handle(self):
+        transport = self.server.transport
+        if transport._handler is None:
+            return
+        chan = FakeChannel(self.request)
+        transport._handler(chan, self.client_address, self.server.server_address)
+
+
+class _RemoteServer(socketserver.ThreadingTCPServer):
+    """リモートフォワード用サーバー: ソケットは handler が閉じる。"""
+
+    def shutdown_request(self, request):
+        pass
+
+    def close_request(self, request):
+        pass
+
+
 class FakeTransport:
-    """open_channel でリモート先へ TCP 接続するだけの Transport もどき。"""
+    """open_channel / request_port_forward / cancel_port_forward を模倣する Transport。"""
 
     def __init__(self, fail: bool = False):
         self.fail = fail
+        self._handler = None
+        self._remote_server: socketserver.ThreadingTCPServer | None = None
 
     def open_channel(self, kind, dest_addr, src_addr):
         assert kind == "direct-tcpip"
@@ -68,14 +104,33 @@ class FakeTransport:
             raise OSError("Connection refused: Connect failed")
         return FakeChannel(socket.create_connection(dest_addr, timeout=5))
 
+    def request_port_forward(self, address, port, handler):
+        """サーバー側で listen するポートを確保し、接続時に handler を呼ぶ。"""
+        self._handler = handler
+        srv = _RemoteServer(("127.0.0.1", 0), _RemoteHandler)
+        srv.daemon_threads = True
+        srv.transport = self
+        self._remote_server = srv
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv.server_address[1]
+
+    def cancel_port_forward(self, address, port):
+        if self._remote_server is not None:
+            self._remote_server.shutdown()
+            self._remote_server.server_close()
+            self._remote_server = None
+
 
 class _Echo(socketserver.BaseRequestHandler):
     def handle(self):
-        while True:
-            data = self.request.recv(4096)
-            if not data:
-                return
-            self.request.sendall(data)
+        try:
+            while True:
+                data = self.request.recv(4096)
+                if not data:
+                    return
+                self.request.sendall(data)
+        except OSError:
+            pass
 
 
 @pytest.fixture()
@@ -86,6 +141,17 @@ def echo_server():
     yield srv.server_address
     srv.shutdown()
     srv.server_close()
+
+
+def _recv_exact(sock: socket.socket, n: int) -> bytes:
+    sock.settimeout(15)
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(min(65536, n - len(buf)))
+        if not chunk:
+            break
+        buf += chunk
+    return buf
 
 
 def _connect_forward(fwd: LocalForward) -> socket.socket:
@@ -154,7 +220,6 @@ def test_forward_open_channel_failure():
     fwd.start()
     try:
         with _connect_forward(fwd) as c:
-            # サーバー側が close するので、read は EOF か RST になる
             c.settimeout(5)
             try:
                 assert c.recv(1) == b""
@@ -180,15 +245,103 @@ def test_forward_stop_closes_listener(echo_server):
         socket.create_connection(("127.0.0.1", fwd.local_port), timeout=2)
 
 
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    sock.settimeout(15)
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(min(65536, n - len(buf)))
-        if not chunk:
-            break
-        buf += chunk
-    return buf
+# ---- リモートフォワード (-R) ------------------------------------------------
+
+
+def _wait_for_remote_forward(fwd: RemoteForward, timeout: float = 5.0) -> bool:
+    """リモート側の待受ポートが接続可能になるまで待つ。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", fwd.remote_port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def test_remote_forward_roundtrip(echo_server):
+    """リモート待受ポートへ接続すると、ローカル転送先と往復する。"""
+    host, port = echo_server
+    fwd = RemoteForward(FakeTransport(), "127.0.0.1", 0, host, port)
+    fwd.start()
+    try:
+        assert fwd.remote_port != 0
+        assert _wait_for_remote_forward(fwd)
+        with socket.create_connection(("127.0.0.1", fwd.remote_port), timeout=5) as c:
+            c.sendall(b"hello-remote")
+            assert _recv_exact(c, len(b"hello-remote")) == b"hello-remote"
+    finally:
+        fwd.stop()
+
+
+def test_remote_forward_stop_closes_listener():
+    """stop() 後はリモート待受ポートに接続できない。"""
+    fwd = RemoteForward(FakeTransport(), "127.0.0.1", 0, "127.0.0.1", 1)
+    fwd.start()
+    assert fwd.remote_port != 0
+    _wait_for_remote_forward(fwd)
+    fwd.stop()
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", fwd.remote_port), timeout=2)
+
+
+# ---- ダイナミックフォワード (-D / SOCKS5) -----------------------------------
+
+
+def _socks5_request(sock: socket.socket, host: str, port: int, atyp: int = 0x01):
+    """SOCKS5 ハンドシェイクと CONNECT リクエストを送信、成功応答を読む。"""
+    sock.sendall(b"\x05\x01\x00")
+    resp = _recv_exact(sock, 2)
+    assert resp == b"\x05\x00"
+    if atyp == 0x01:
+        addr = socket.inet_aton(host)
+    elif atyp == 0x03:
+        addr = len(host).to_bytes(1, "big") + host.encode("utf-8")
+    else:
+        raise ValueError("未対応の atyp")
+    req = b"\x05\x01\x00" + atyp.to_bytes(1, "big") + addr + struct.pack("!H", port)
+    sock.sendall(req)
+    reply = _recv_exact(sock, 10)
+    assert reply[:4] == b"\x05\x00\x00\x01"
+
+
+def test_dynamic_forward_roundtrip(echo_server):
+    """SOCKS5 プロキシ経由で接続すると、echo サーバーと往復する。"""
+    host, port = echo_server
+    fwd = DynamicForward(FakeTransport(), "127.0.0.1", 0)
+    fwd.start()
+    try:
+        with socket.create_connection(("127.0.0.1", fwd.local_port), timeout=5) as c:
+            _socks5_request(c, "127.0.0.1", port, atyp=0x01)
+            c.sendall(b"hello-dynamic")
+            assert _recv_exact(c, len(b"hello-dynamic")) == b"hello-dynamic"
+    finally:
+        fwd.stop()
+
+
+def test_dynamic_forward_domain(echo_server):
+    """SOCKS5 のドメイン型(ATYP=0x03)リクエストも転送できる。"""
+    host, port = echo_server
+    fwd = DynamicForward(FakeTransport(), "127.0.0.1", 0)
+    fwd.start()
+    try:
+        with socket.create_connection(("127.0.0.1", fwd.local_port), timeout=5) as c:
+            _socks5_request(c, "127.0.0.1", port, atyp=0x03)
+            c.sendall(b"hello-domain")
+            assert _recv_exact(c, len(b"hello-domain")) == b"hello-domain"
+    finally:
+        fwd.stop()
+
+
+def test_dynamic_forward_stop_closes_listener():
+    """stop() 後は SOCKS5 待受ポートに接続できない。"""
+    fwd = DynamicForward(FakeTransport(), "127.0.0.1", 0)
+    fwd.start()
+    fwd.stop()
+    time.sleep(1.2)
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", fwd.local_port), timeout=2)
 
 
 # ---- ライブ結合テスト(実 sshd が必要。Issue #1 の実機検証を再現) ----------

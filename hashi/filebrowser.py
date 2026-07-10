@@ -315,18 +315,22 @@ class SftpWorker(QThread):
         return holder["r"]
 
     def _get_ov(self, remote, local, callback, is_dir=False):
-        op = lambda: self.sftp.get(remote, local, callback=callback)
+        def _op():
+            return self.sftp.get(remote, local, callback=callback)
+
         if self.perm_override:
-            self.pm.with_read_access(remote, op, is_dir=is_dir)
+            self.pm.with_read_access(remote, _op, is_dir=is_dir)
         else:
-            op()
+            _op()
 
     def _put_ov(self, local, remote, callback):
-        op = lambda: self.sftp.put(local, remote, callback=callback)
+        def _op():
+            return self.sftp.put(local, remote, callback=callback)
+
         if self.perm_override:
-            self.pm.with_write_access(remote, op)
+            self.pm.with_write_access(remote, _op)
         else:
-            op()
+            _op()
 
     def _job_perm_recover(self, job):
         """前回のプロセスが戻せなかった権限をジャーナルから復元。"""
@@ -417,7 +421,9 @@ class SftpWorker(QThread):
     def _job_upload(self, job):
         files = job["files"]
         self._ensure_remote_dirs(job.get("dirs", []))
-        total = sum(os.path.getsize(l) for l, _ in files if os.path.exists(l))
+        total = sum(
+            os.path.getsize(local) for local, _ in files if os.path.exists(local)
+        )
         done_before = 0
         for i, (local, remote) in enumerate(files):
             self._check_cancel()
@@ -1115,7 +1121,11 @@ class SftpBrowser(QWidget):
             self.xfer.enqueue({"kind": "upload", "files": files, "dirs": dirs})
         elif clicked is b_skip:
             conflict_remotes = {c["remote"] for c in conflicts}
-            remain = [(l, r) for l, r in files if r not in conflict_remotes]
+            remain = [
+                (local, remote)
+                for local, remote in files
+                if remote not in conflict_remotes
+            ]
             if not remain and not dirs:
                 self._on_status("送信するファイルがありません")
                 return

@@ -355,47 +355,115 @@ class ConnectDialog(QDialog):
 
 
 class TunnelDialog(QDialog):
-    """ローカルポートフォワード (-L) の追加。"""
+    """ポートフォワード (-L / -R / -D) の追加。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ポートフォワード (ローカル -L)")
+        self.setWindowTitle("ポートフォワードの追加")
         self.setModal(True)
         self.setMinimumWidth(420)
+
+        root = QVBoxLayout(self)
         form = QFormLayout()
-        self.sp_lport = QSpinBox()
-        self.sp_lport.setRange(1, 65535)
-        self.sp_lport.setValue(8080)
-        self.ed_lhost = QLineEdit("127.0.0.1")
-        self.ed_rhost = QLineEdit("127.0.0.1")
-        self.sp_rport = QSpinBox()
-        self.sp_rport.setRange(1, 65535)
-        self.sp_rport.setValue(80)
-        form.addRow("ローカル待受ホスト", self.ed_lhost)
-        form.addRow("ローカル待受ポート", self.sp_lport)
-        form.addRow("転送先ホスト(サーバー側から見て)", self.ed_rhost)
-        form.addRow("転送先ポート", self.sp_rport)
-        note = QLabel(
+
+        self.cb_type = QComboBox()
+        self.cb_type.addItem("ローカル (-L)", "local")
+        self.cb_type.addItem("リモート (-R)", "remote")
+        self.cb_type.addItem("ダイナミック (-D / SOCKS5)", "dynamic")
+
+        self.ed_bind_host = QLineEdit("127.0.0.1")
+        self.sp_bind_port = QSpinBox()
+        self.sp_bind_port.setRange(0, 65535)
+        self.sp_bind_port.setValue(8080)
+        self.ed_dest_host = QLineEdit("127.0.0.1")
+        self.sp_dest_port = QSpinBox()
+        self.sp_dest_port.setRange(1, 65535)
+        self.sp_dest_port.setValue(80)
+
+        form.addRow("種別", self.cb_type)
+        form.addRow("待受ホスト", self.ed_bind_host)
+        form.addRow("待受ポート", self.sp_bind_port)
+        form.addRow("転送先ホスト", self.ed_dest_host)
+        form.addRow("転送先ポート", self.sp_dest_port)
+
+        self._label_bind_host = form.labelForWidget(self.ed_bind_host)
+        self._label_bind_port = form.labelForWidget(self.sp_bind_port)
+        self._label_dest_host = form.labelForWidget(self.ed_dest_host)
+        self._label_dest_port = form.labelForWidget(self.sp_dest_port)
+
+        self.note = QLabel(
             "例: ローカル 8080 → サーバー側から見た 127.0.0.1:80 に転送。\n"
-            "localhost:ローカルポート にアクセスすると、SSH 経由で転送先へ繋がります。")
-        note.setStyleSheet("color:#888;")
-        note.setWordWrap(True)
+            "localhost:ローカルポート にアクセスすると、SSH 経由で転送先へ繋がります。"
+        )
+        self.note.setStyleSheet("color:#888;")
+        self.note.setWordWrap(True)
+
         buttons = QDialogButtonBox()
         buttons.addButton("追加", QDialogButtonBox.AcceptRole)
         buttons.addButton("キャンセル", QDialogButtonBox.RejectRole)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        root = QVBoxLayout(self)
+
         root.addLayout(form)
-        root.addWidget(note)
+        root.addWidget(self.note)
         root.addWidget(buttons)
 
+        self.cb_type.currentIndexChanged.connect(self._on_type_changed)
+        self._on_type_changed()
+
+    def _on_type_changed(self):
+        kind = self.cb_type.currentData()
+        if kind == "local":
+            self._label_bind_host.setText("ローカル待受ホスト")
+            self._label_bind_port.setText("ローカル待受ポート")
+            self._label_dest_host.setText("転送先ホスト(サーバー側から見て)")
+            self._label_dest_port.setText("転送先ポート")
+            self._set_dest_visible(True)
+            self.note.setText(
+                "例: ローカル 8080 → サーバー側から見た 127.0.0.1:80 に転送。\n"
+                "localhost:ローカルポート にアクセスすると、SSH 経由で転送先へ繋がります。"
+            )
+        elif kind == "remote":
+            self._label_bind_host.setText("リモート待受ホスト(サーバー側)")
+            self._label_bind_port.setText("リモート待受ポート")
+            self._label_dest_host.setText("転送先ホスト(ローカル)")
+            self._label_dest_port.setText("転送先ポート")
+            self._set_dest_visible(True)
+            self.note.setText(
+                "例: サーバー側 8080 → ローカル 127.0.0.1:80 に転送。\n"
+                "リモートホスト:ポート にアクセスすると、SSH 経由でローカル転送先へ繋がります。"
+            )
+        elif kind == "dynamic":
+            self._label_bind_host.setText("SOCKS5 待受ホスト")
+            self._label_bind_port.setText("SOCKS5 待受ポート")
+            self._set_dest_visible(False)
+            self.note.setText(
+                "例: ブラウザやアプリの SOCKS5 プロキシとして 127.0.0.1:8080 を指定。\n"
+                "接続先は動的に決まり、SSH 経由で直接転送されます。"
+            )
+
+    def _set_dest_visible(self, visible: bool):
+        self._label_dest_host.setVisible(visible)
+        self.ed_dest_host.setVisible(visible)
+        self._label_dest_port.setVisible(visible)
+        self.sp_dest_port.setVisible(visible)
+
     def result(self):
+        kind = self.cb_type.currentData()
+        if kind == "remote":
+            return {
+                "type": "remote",
+                "remote_host": self.ed_bind_host.text().strip() or "127.0.0.1",
+                "remote_port": self.sp_bind_port.value(),
+                "local_host": self.ed_dest_host.text().strip() or "127.0.0.1",
+                "local_port": self.sp_dest_port.value(),
+            }
         return {
-            "local_host": self.ed_lhost.text().strip() or "127.0.0.1",
-            "local_port": self.sp_lport.value(),
-            "remote_host": self.ed_rhost.text().strip() or "127.0.0.1",
-            "remote_port": self.sp_rport.value(),
+            "type": kind,
+            "local_host": self.ed_bind_host.text().strip() or "127.0.0.1",
+            "local_port": self.sp_bind_port.value(),
+            "remote_host": self.ed_dest_host.text().strip() or "127.0.0.1",
+            "remote_port": self.sp_dest_port.value() if kind != "dynamic" else 0,
         }
 
 
