@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hashi-ssh"
+description = "PuTTY + WinSCP を 1 画面に統合した Windows 向け SSH / SFTP クライアント"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hashiguchi" }]
+dynamic = ["version"]
+dependencies = [
+    "PySide6>=6.6",
+    "paramiko>=3.4",
+    "pyte>=0.8.2",
+    "wcwidth>=0.2.13",
+    "keyring>=24.0",
+    "cryptography>=3.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pyinstaller>=6.0", "ruff>=0.5"]
+
+[project.gui-scripts]
+hashi = "main:main"
+
+[project.urls]
+Homepage = "https://github.com/shumaimai/SSH.FTP-"
+Changelog = "https://github.com/shumaimai/SSH.FTP-/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+py-modules = ["main"]
+packages = ["hashi"]
+
+[tool.setuptools.dynamic]
+version = { attr = "hashi.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# 実用重視: 未使用 import / 明白なバグ系のみ。日本語コメント多用のため過度な整形はしない
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # 行長は line-length で緩め

@@ -123,7 +123,7 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
    ```
 4. `.github/workflows/release.yml` が windows-latest で PyInstaller ビルド → GitHub Release を
    作成し `Hashi.exe` を添付する(GITHUB_TOKEN は自動。secret 設定不要)。
-5. CHANGELOG のリンク行にある `USER` を実際の GitHub ユーザー名に置換すること(pyproject も同様)。
+5. リポジトリは `shumaimai/SSH.FTP-`。README / CHANGELOG / pyproject 内のリンクは置換済み。
 
 - keyring は凍結時にバックエンドを取りこぼすため `Hashi.spec` で `collect_submodules("keyring")` と
   `win32ctypes` を明示収集している。Windows の資格情報マネージャ backend が動かない症状が出たら

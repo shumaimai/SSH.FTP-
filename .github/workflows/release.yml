@@ -1,0 +1,56 @@
+name: Release
+
+# vX.Y.Z タグを push するとビルドして GitHub Release を作成し、
+# Windows 用の Hashi.exe を添付する。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # リリース作成に必要
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: タグと hashi.__version__ の一致を確認
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(python -c "import hashi; print(hashi.__version__)")
+          echo "tag=$TAG  version=$VER"
+          if [ "$TAG" != "$VER" ]; then
+            echo "::error::タグ ($TAG) と hashi.__version__ ($VER) が一致しません"
+            exit 1
+          fi
+
+      - name: PyInstaller でビルド
+        run: pyinstaller --noconfirm Hashi.spec
+
+      - name: zip 化
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/Hashi.exe -DestinationPath "dist/Hashi-${{ github.ref_name }}-windows-x64.zip"
+
+      - name: リリース作成 + 添付
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Hashi ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/Hashi.exe
+            dist/Hashi-${{ github.ref_name }}-windows-x64.zip

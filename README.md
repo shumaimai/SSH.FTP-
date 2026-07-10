@@ -1,11 +1,9 @@
 # Hashi — SSH / SFTP クライアント v0.2.0
 
-![CI](https://github.com/shumaimai/hashi/actions/workflows/ci.yml/badge.svg)
-![Release](https://img.shields.io/github/v/release/shumaimai/hashi?sort=semver)
+![CI](https://github.com/shumaimai/SSH.FTP-/actions/workflows/ci.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/shumaimai/SSH.FTP-?sort=semver)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-
-
 
 橋 (bridge)。ローカルとリモートをつなぐ、Windows でまともに使える SSH ターミナル + SFTP ファイルブラウザ.
 PuTTY + WinSCP を別々に開かなくていいのがコンセプト。1 接続 = 1 タブで、ターミナルとファイル操作が横に並ぶ。
@@ -81,6 +79,10 @@ python -m compileall main.py hashi tools
 
 テストはネットワーク不要(フェイク SSH を使用)。権限無視・ジャーナル・クラッシュ復元・
 認証情報の暗号化往復・TOFU・パスワードプロンプト検知をカバー。
+
+コントリビュートは大歓迎です。[CONTRIBUTING.md](CONTRIBUTING.md) を読んでから、
+[Issues](https://github.com/shumaimai/SSH.FTP-/issues) の `good first issue` あたりからどうぞ。
+脆弱性の報告は [SECURITY.md](SECURITY.md) へ。
 
 ## ビルド(Windows exe)
 

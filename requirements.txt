@@ -1,0 +1,7 @@
+PySide6>=6.6
+paramiko>=3.4
+pyte>=0.8.2
+wcwidth>=0.2.13
+keyring>=24.0
+# cryptography は paramiko の依存として入りますが、暗号化フォールバックでも使用します
+cryptography>=3.4

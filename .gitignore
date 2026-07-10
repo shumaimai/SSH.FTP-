@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec.bak
+
+# PyInstaller
+/build/
+/dist/
+
+# 仮想環境
+.venv/
+venv/
+env/
+
+# テスト/カバレッジ
+.pytest_cache/
+.coverage
+htmlcov/
+
+# エディタ/OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Hashi のローカル設定(誤コミット防止。実際は %APPDATA%/~/.config 側)
+/Hashi/
+perm_journal.json
+creds.dat
+.credkey
+profiles.json
+known_hosts.json
+settings.json
