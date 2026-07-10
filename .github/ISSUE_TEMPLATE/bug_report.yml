@@ -1,0 +1,38 @@
+name: バグ報告
+description: 動作がおかしい・クラッシュする等の報告
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 何が起きたか
+      description: 期待した動作と、実際に起きたことを書いてください。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. サーバー X に接続
+        2. SFTP ブラウザで ...
+        3. すると ...
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 環境
+      description: OS / Python バージョン / Hashi のバージョン / 接続先サーバー(OS・sshd)の種類
+      placeholder: |
+        - OS: Windows 11
+        - Python: 3.12
+        - Hashi: v0.2.0(exe / ソースから)
+        - 接続先: Ubuntu 22.04 (OpenSSH)
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: ログ・スクリーンショット(あれば)
+      description: パスワードや秘密鍵が写り込んでいないか確認してから貼ってください。
