@@ -5,9 +5,12 @@ local_host:local_port へ来た接続を、SSH 経由で remote_host:remote_port
 """
 from __future__ import annotations
 
+import logging
 import select
 import socket
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 class LocalForward:
@@ -73,11 +76,12 @@ class LocalForward:
             try:
                 chan.close()
             except Exception:
-                pass
+                logger.debug("フォワードチャネルの close に失敗 (無視)", exc_info=True)
             try:
                 client.close()
             except Exception:
-                pass
+                logger.debug("フォワードクライアントソケットの close に失敗 (無視)",
+                             exc_info=True)
 
     @staticmethod
     def _pump(sock: socket.socket, chan):
@@ -117,5 +121,5 @@ class LocalForward:
             try:
                 self._server.close()
             except Exception:
-                pass
+                logger.debug("フォワードサーバーソケットの close に失敗 (無視)", exc_info=True)
         self._server = None

@@ -6,11 +6,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from . import __version__
+
+logger = logging.getLogger(__name__)
+
 APP_NAME = "Hashi"
+APP_VERSION = __version__   # バージョンの単一ソース (hashi/__init__.py)
 
 AUTH_KEY = "key"
 AUTH_PASSWORD = "password"
@@ -70,8 +76,9 @@ class ProfileStore:
         except FileNotFoundError:
             pass
         except Exception:
-            # 壊れたファイルは無視(上書き保存で復旧)
-            pass
+            # 壊れたファイルは無視(上書き保存で復旧)するが、警告は残す
+            logger.warning("profiles.json を読み込めません(無視して続行): %s",
+                           self.path, exc_info=True)
 
     def save(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -118,8 +125,11 @@ class Settings:
             for k in self.DEFAULTS:
                 if k in d:
                     self._data[k] = d[k]
-        except Exception:
+        except FileNotFoundError:
             pass
+        except Exception:
+            logger.warning("settings.json を読み込めません(既定値で続行): %s",
+                           self.path, exc_info=True)
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")
@@ -148,7 +158,11 @@ class KnownHosts:
     def load(self) -> None:
         try:
             self._data = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            self._data = {}
         except Exception:
+            logger.warning("known_hosts.json を読み込めません(空で続行): %s",
+                           self.path, exc_info=True)
             self._data = {}
 
     def save(self) -> None:

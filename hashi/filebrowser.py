@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import posixpath
 import queue
@@ -47,6 +48,8 @@ from .editor import EditorWindow
 from .permjournal import PermJournal
 from .privilege import OverrideError, PermManager
 
+logger = logging.getLogger(__name__)
+
 OPEN_SIZE_WARN = 50 * 1024 * 1024  # ダブルクリックで開く際の警告サイズ
 EDIT_SIZE_LIMIT = 8 * 1024 * 1024  # 内蔵エディタで開く上限
 TEXT_EXTS = {
@@ -77,6 +80,7 @@ def fmt_mtime(ts) -> str:
     try:
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
     except Exception:
+        logger.debug("mtime の整形に失敗: %r", ts, exc_info=True)
         return ""
 
 
@@ -225,7 +229,8 @@ class SftpWorker(QThread):
             if stuck:
                 self.recover_incomplete.emit(stuck)
         except Exception:
-            pass
+            # 復元失敗は次回接続で再試行されるが、黙って消さないで記録する。
+            logger.warning("未復元権限の復元処理に失敗しました", exc_info=True)
 
     # -- 各ジョブ ---------------------------------------------------------
     def _job_init(self, job):
@@ -425,6 +430,8 @@ class SftpWorker(QThread):
                 head = f.read(8192)
             is_binary = b"\x00" in head
         except Exception:
+            logger.debug("バイナリ判定のための読み取りに失敗 (テキスト扱い): %s",
+                         local, exc_info=True)
             is_binary = False
         if is_binary:
             self.status.emit("バイナリのため関連付けアプリで開きます")

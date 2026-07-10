@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import threading
 import time
 
 from .config import config_dir
+
+logger = logging.getLogger(__name__)
 
 # 同一プロセス内の全 PermJournal インスタンスでファイル操作を直列化
 _FILE_LOCK = threading.RLock()
@@ -41,6 +44,8 @@ def pid_alive(pid: int | None) -> bool:
                 return True
             return False
         except Exception:
+            logger.debug("pid 生存判定 (Windows) に失敗 (安全側=生存とみなす)",
+                         exc_info=True)
             return True  # 判定できないなら復元を控える
     try:
         os.kill(int(pid), 0)
@@ -61,7 +66,12 @@ class PermJournal:
     def _load(self) -> dict:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
         except Exception:
+            # 壊れたジャーナルは復元取りこぼしに直結するので必ず警告する
+            logger.warning("権限ジャーナルを読み込めません（未復元の権限が残る可能性）: %s",
+                           self.path, exc_info=True)
             return {}
 
     def _save(self, data: dict) -> None:

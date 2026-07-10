@@ -18,6 +18,7 @@ chmod はまず SFTP で試し(自分が所有者なら成功)、ダメなら SS
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import posixpath
 import shlex
@@ -25,6 +26,8 @@ import stat as statmod
 import threading
 
 from .permjournal import PermJournal, pid_alive
+
+logger = logging.getLogger(__name__)
 
 # 追加で付与するビット。接続ユーザーが所有者とは限らないため other も含める
 _READ_BITS = 0o444    # a+r
@@ -74,7 +77,7 @@ class PermManager:
                 try:
                     self._sftp.close()
                 except Exception:
-                    pass
+                    logger.debug("専用 SFTP チャネルの close に失敗 (無視)", exc_info=True)
                 self._sftp = None
 
     # ---- 低レベル(すべてロック下で呼ぶこと) -------------------------------
@@ -150,6 +153,9 @@ class PermManager:
                 if e["granted"]:            # 実際に緩めたものだけ戻す
                     self.chmod(path, e["orig"])
             except Exception as ex:  # noqa: BLE001
+                # 権限を元に戻せなかった。ジャーナルには残るので次回復元されるが、
+                # サーバー側の権限が一時的に緩んだままなので警告する。
+                logger.warning("権限の復元に失敗: %s", path, exc_info=True)
                 self.restore_errors.append(f"{path}: {ex}")
             finally:
                 if e["eid"]:
@@ -191,7 +197,9 @@ class PermManager:
                             _DIR_ENTER_BITS if self._is_dir_maybe_sudo(child) else 0)
                         plan.append((child, cbits))
                 except Exception:
-                    pass
+                    # 子の先回りは best-effort。列挙に失敗しても本体の読取は続ける。
+                    logger.debug("読取許可の子エントリ列挙に失敗 (best-effort): %s",
+                                 path, exc_info=True)
         return plan
 
     # ---- 書き込みを保証して op を実行 --------------------------------------
@@ -242,6 +250,8 @@ class PermManager:
                 self.journal.clear(e["id"])
                 restored += 1
             except Exception:
+                logger.debug("未復元権限の復元に失敗 (持ち越し): %s",
+                             e.get("path"), exc_info=True)
                 stuck += 1  # 次回 or sudo 入手後に持ち越し
         return (restored, stuck)
 

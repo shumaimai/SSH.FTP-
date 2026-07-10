@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import socket
 
 import paramiko
 
 from . import sshconfig
 from .config import AUTH_AGENT, AUTH_KEY, KnownHosts, Profile
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectCancelled(Exception):
@@ -237,7 +240,7 @@ class SshSession:
                         and not ch.recv_stderr_ready():
                     break
         except Exception:
-            pass
+            logger.debug("exec_command 出力読み取り中に例外 (継続)", exc_info=True)
         rc = ch.recv_exit_status()
         # 残りを吸い出す
         while ch.recv_ready():
@@ -261,7 +264,9 @@ class SshSession:
             try:
                 ch.sendall((password + "\n").encode("utf-8"))
             except Exception:
-                pass
+                # 送信失敗すると sudo はプロンプトで止まる/失敗する。rc/err で
+                # 下流に伝わるが、原因追跡のため記録は残す。
+                logger.warning("sudo パスワードの送信に失敗しました", exc_info=True)
         out, err = b"", b""
         try:
             while not ch.exit_status_ready():
@@ -270,7 +275,7 @@ class SshSession:
                 if ch.recv_stderr_ready():
                     err += ch.recv_stderr(65536)
         except Exception:
-            pass
+            logger.debug("run_sudo 出力読み取り中に例外 (継続)", exc_info=True)
         rc = ch.recv_exit_status()
         while ch.recv_ready():
             out += ch.recv(65536)
@@ -287,5 +292,5 @@ class SshSession:
             try:
                 self.transport.close()
             except Exception:
-                pass
+                logger.debug("transport.close() に失敗 (無視)", exc_info=True)
             self.transport = None

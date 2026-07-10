@@ -7,6 +7,7 @@ GUI スレッドに問い合わせる。
 """
 from __future__ import annotations
 
+import logging
 import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
@@ -40,6 +41,8 @@ from .forward import LocalForward
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
 
+logger = logging.getLogger(__name__)
+
 
 class ConnectWorker(QThread):
     """接続処理スレッド。秘密情報の入力は GUI に signal で依頼してブロック待機。
@@ -63,6 +66,7 @@ class ConnectWorker(QThread):
         self._evt = threading.Event()
         self._resp = None
         self._tried_kinds: set[str] = set()
+        self._saved_kinds: set[str] = set()   # 保存済みストアから読んで使った種別
         self.used_password: str | None = None
         self.used_passphrase: str | None = None
 
@@ -85,6 +89,7 @@ class ConnectWorker(QThread):
             self._tried_kinds.add(kind)
             saved = self.credentials.get(self.profile, kind)
             if saved:
+                self._saved_kinds.add(kind)
                 self._remember(kind, saved)
                 return saved
         # 2) 入力を求める
@@ -117,9 +122,12 @@ class ConnectWorker(QThread):
         except ConnectCancelled:
             self.fail.emit("")
         except Exception as e:  # noqa: BLE001
-            # 認証失敗時、保存済みが誤りだった可能性 → 保存を消しておく
+            # 認証失敗時、保存済みが誤りだった可能性 → 使った保存済み認証情報を消す
+            # (次回また同じ誤りで自動失敗し続けるのを防ぐ)
             if self.credentials and "auth" in str(e).lower():
-                pass
+                for kind in self._saved_kinds:
+                    self.credentials.delete(self.profile, kind)
+                    logger.info("認証失敗のため保存済み %s を削除しました", kind)
             self.fail.emit(str(e))
 
 

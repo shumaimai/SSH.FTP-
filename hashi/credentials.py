@@ -13,9 +13,12 @@ kind は "password" / "passphrase" / "sudo" のいずれか。
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from .config import Profile, config_dir
+
+logger = logging.getLogger(__name__)
 
 SERVICE = "Hashi"
 _KINDS = ("password", "passphrase", "sudo")
@@ -44,14 +47,19 @@ class _FernetFile:
         try:
             os.chmod(self.key_path, 0o600)
         except OSError:
-            pass
+            logger.debug("鍵ファイルの chmod 0600 に失敗 (続行): %s",
+                         self.key_path, exc_info=True)
         return key
 
     def _load(self) -> dict:
         try:
             raw = self.data_path.read_bytes()
             return json.loads(self._fernet.decrypt(raw).decode("utf-8"))
+        except FileNotFoundError:
+            return {}
         except Exception:
+            logger.warning("認証情報ファイルを復号できません（空として扱います）: %s",
+                           self.data_path, exc_info=True)
             return {}
 
     def _save(self, d: dict) -> None:
@@ -61,7 +69,7 @@ class _FernetFile:
         try:
             os.chmod(tmp, 0o600)
         except OSError:
-            pass
+            logger.debug("creds.dat の chmod 0600 に失敗 (続行)", exc_info=True)
         tmp.replace(self.data_path)
 
     def get(self, key: str):
@@ -101,18 +109,23 @@ class CredentialStore:
                     keyring.set_password(SERVICE, "__probe__", "1")
                     keyring.delete_password(SERVICE, "__probe__")
                 except Exception:
+                    logger.debug("keyring 書き込みプローブ失敗→ファイルにフォールバック",
+                                 exc_info=True)
                     usable = False
             if usable:
                 self._keyring = keyring
                 self.backend_name = type(kr).__name__
                 return
         except Exception:
-            pass
+            logger.debug("keyring バックエンドの初期化に失敗→ファイルにフォールバック",
+                         exc_info=True)
         # フォールバック: 暗号化ファイル
         try:
             self._file = _FernetFile()
             self.backend_name = "encrypted-file"
         except Exception:
+            logger.warning("暗号化ファイルバックエンドも使えません。認証情報は保存されません",
+                           exc_info=True)
             self.backend_name = "none"  # 保存不可 (メモリのみ)
 
     @property
@@ -136,6 +149,7 @@ class CredentialStore:
             if self._file is not None:
                 return self._file.get(key)
         except Exception:
+            logger.warning("認証情報の取得に失敗: %s", kind, exc_info=True)
             return None
         return None
 
@@ -151,6 +165,7 @@ class CredentialStore:
                 self._file.set(key, secret)
                 return True
         except Exception:
+            logger.warning("認証情報の保存に失敗: %s", kind, exc_info=True)
             return False
         return False
 
@@ -162,7 +177,7 @@ class CredentialStore:
             elif self._file is not None:
                 self._file.delete(key)
         except Exception:
-            pass
+            logger.warning("認証情報の削除に失敗: %s", kind, exc_info=True)
 
     def clear_profile(self, profile: Profile) -> None:
         for kind in _KINDS:
