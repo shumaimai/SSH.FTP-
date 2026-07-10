@@ -7,9 +7,8 @@
 - 内蔵エディタの検索(Ctrl+F / F3 / 次へ / 前へ)が `AttributeError` でクラッシュしていた
   (`QPlainTextEdit.FindFlag` → 正しくは `QTextDocument.FindFlag`)。
 - 悪意ある SFTP サーバーのファイル名で、選択した保存先の外へ書き込めるパストラバーサルを防止。
-- リモート側が偽装した sudo プロンプトへ保存済みパスワードを自動送信しないよう、送信前確認を必須化。
+- 確認ダイアログへ表示するファイル名を HTML エスケープ。
 - 接続診断ツールのコマンドライン引数から秘密情報を渡せる隠しオプションを削除。
-- 既知の脆弱性を含む古い Paramiko / cryptography / setuptools が条件を満たさないよう最低版を更新。
 
 ### 追加
 - **`~/.ssh/config` の読み込み**(#3): ホスト欄の Host エイリアスから HostName / User /

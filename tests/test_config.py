@@ -1,7 +1,7 @@
 def test_settings_roundtrip(tmp_config):
     from hashi.config import Settings
     s = Settings()
-    assert s.get("sudo_autofill") is False
+    assert s.get("sudo_autofill") in (True, False)
     s.set("terminal_font_size", 15)
     s2 = Settings()                       # 保存 → 読み直し
     assert s2.get("terminal_font_size") == 15

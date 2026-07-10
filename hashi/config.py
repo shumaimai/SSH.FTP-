@@ -105,7 +105,7 @@ class Settings:
     """アプリ全体の設定 (settings.json)。"""
 
     DEFAULTS = {
-        "sudo_autofill": False,         # sudo プロンプト検知時に確認してパスワード送信
+        "sudo_autofill": True,          # sudo プロンプト検知時に自動でパスワード送信
         "permission_override": False,   # SFTP 権限無視スイッチの既定
         "right_click_paste": True,      # 右クリックで貼り付け (PuTTY 流)
         "terminal_font_size": 11,

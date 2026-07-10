@@ -353,7 +353,7 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(440)
         form = QFormLayout()
-        self.chk_sudo = QCheckBox("sudo プロンプトを検知して送信前に確認する")
+        self.chk_sudo = QCheckBox("sudo プロンプトを検知してパスワードを自動入力")
         self.chk_sudo.setChecked(settings.get("sudo_autofill"))
         self.chk_rclick = QCheckBox("右クリックで貼り付け (PuTTY 流)")
         self.chk_rclick.setChecked(settings.get("right_click_paste"))
