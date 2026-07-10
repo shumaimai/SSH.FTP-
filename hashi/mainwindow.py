@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import APP_VERSION, KnownHosts, Profile, ProfileStore, Settings
+from . import __version__ as APP_VERSION
+from .config import KnownHosts, Profile, ProfileStore, Settings
 from .credentials import CredentialStore
 from .dialogs import (
     ConnectDialog,
