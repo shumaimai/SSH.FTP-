@@ -8,6 +8,9 @@
   (`QPlainTextEdit.FindFlag` → 正しくは `QTextDocument.FindFlag`)。
 
 ### 追加
+- **`~/.ssh/config` の読み込み**(#3): ホスト欄の Host エイリアスから HostName / User /
+  Port / IdentityFile を解決して接続。ProxyJump / ProxyCommand は未対応で、検出時は
+  黙って直接接続せずエラーで明示する。
 - ローカルポートフォワード(-L)を実 sshd で通し検証し、`tests/test_forward.py` に
   ユニット + ライブ結合テストとして恒久化(#1)。
 - terminal / editor のテスト拡充(選択コピー・全角幅・プロンプト重複抑止・改行変換・
