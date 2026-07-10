@@ -1,3 +1,4 @@
+import json
 import os
 
 from hashi.permjournal import PermJournal, pid_alive
@@ -30,3 +31,13 @@ def test_survives_reload(tmp_path):
     # 別インスタンスで読み直しても残っている(永続化)
     j2 = PermJournal(p)
     assert j2.has_pending("A@h:22")
+
+
+def test_corrupt_journal_recovers_on_next_record(tmp_path):
+    p = tmp_path / "j.json"
+    p.write_text("{broken", encoding="utf-8")
+
+    PermJournal(p).record("A@h:22", "/x", 0o644, 111)
+
+    entries = json.loads(p.read_text(encoding="utf-8"))
+    assert [entry["path"] for entry in entries.values()] == ["/x"]
