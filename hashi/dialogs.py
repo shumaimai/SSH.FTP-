@@ -261,9 +261,9 @@ class ConnectDialog(QDialog):
         form.addRow("初期パス", self.ed_initial)
         form.addRow("", self.chk_save)
         form.addRow("", self.chk_sudo)
-        self._key_label = form.labelForWidget(self._key_row)
-        self._password_label = form.labelForWidget(self.ed_password)
-        self._passphrase_label = form.labelForWidget(self.ed_passphrase)
+        self._key_label = form.labelForField(self._key_row)
+        self._password_label = form.labelForField(self.ed_password)
+        self._passphrase_label = form.labelForField(self.ed_passphrase)
 
         note = QLabel(
             "保存する場合、OS の資格情報ストア(Windows 資格情報マネージャ等)を"
