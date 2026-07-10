@@ -49,6 +49,7 @@ from .dialogs import DoubleCheckDialog
 from .editor import EditorWindow
 from .permjournal import PermJournal
 from .privilege import OverrideError, PermManager
+from .transferqueue import TransferQueue, TransferQueuePanel
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,8 @@ def expand_local(paths: list[str], remote_dir: str):
 
 
 IDLE_PROGRESS = {"label": "", "done": 0, "total": 0}
+
+RESUME_CHUNK = 32768  # レジューム転送の読み書き単位
 
 
 class ExternalFileMonitor(QObject):
@@ -236,6 +239,8 @@ class SftpWorker(QThread):
     external_save_result = Signal(str, str, bool, str)  # remote, local, ok, message
     recover_incomplete = Signal(int)    # 未復元件数(sudo が必要)
     worker_failed = Signal(str)
+    job_started = Signal(object)        # job id
+    job_finished = Signal(object, str, str)  # job id, "done"/"failed"/"cancelled", message
 
     def __init__(self, session, name: str):
         super().__init__()
@@ -248,6 +253,8 @@ class SftpWorker(QThread):
         self._cancel = False
         self.busy = False
         self._last_emit = 0.0
+        self._cancelled_ids: set = set()   # 待機中に取り消されたジョブ ID
+        self._current_id = None            # 実行中ジョブの ID
 
     # -- 外部 API --------------------------------------------------------
     def enqueue(self, job: dict):
@@ -255,6 +262,13 @@ class SftpWorker(QThread):
 
     def cancel(self):
         self._cancel = True
+
+    def cancel_job(self, job_id):
+        """特定ジョブの取り消し。実行中なら中断、待機中なら読み飛ばす。"""
+        if job_id == self._current_id:
+            self._cancel = True
+        else:
+            self._cancelled_ids.add(job_id)
 
     def stop(self):
         self.q.put(None)
@@ -271,18 +285,33 @@ class SftpWorker(QThread):
             job = self.q.get()
             if job is None:
                 break
+            jid = job.get("id")
+            if jid is not None and jid in self._cancelled_ids:
+                self._cancelled_ids.discard(jid)
+                self.job_finished.emit(jid, "cancelled", "")
+                continue
             self._cancel = False
             self.busy = True
+            self._current_id = jid
+            if jid is not None:
+                self.job_started.emit(jid)
             try:
                 self._dispatch(job)
+                if jid is not None:
+                    self.job_finished.emit(jid, "done", "")
             except _Cancelled:
                 self.status.emit("キャンセルしました")
                 self.progress.emit(IDLE_PROGRESS)
+                if jid is not None:
+                    self.job_finished.emit(jid, "cancelled", "")
             except Exception as e:  # noqa: BLE001
                 self.error.emit(str(e))
                 self.progress.emit(IDLE_PROGRESS)
+                if jid is not None:
+                    self.job_finished.emit(jid, "failed", str(e))
             finally:
                 self.busy = False
+                self._current_id = None
         try:
             self.sftp.close()
         except Exception:
@@ -323,6 +352,68 @@ class SftpWorker(QThread):
 
     def _put_ov(self, local, remote, callback):
         op = lambda: self.sftp.put(local, remote, callback=callback)
+        if self.perm_override:
+            self.pm.with_write_access(remote, op)
+        else:
+            op()
+
+    # -- レジューム転送 -------------------------------------------------
+    def _download_file(self, remote, local, size, callback, resume=False):
+        """ダウンロード 1 ファイル。resume 時は部分ファイルの続きから取得。"""
+        offset = 0
+        if resume:
+            try:
+                offset = os.path.getsize(local)
+            except OSError:
+                offset = 0
+        if not (0 < offset < (size or 0)):
+            self._get_ov(remote, local, callback)
+            return
+
+        def op():
+            with self.sftp.open(remote, "rb") as rf, open(local, "ab") as lf:
+                rf.seek(offset)
+                done = offset
+                while done < size:
+                    data = rf.read(min(RESUME_CHUNK, size - done))
+                    if not data:
+                        break
+                    lf.write(data)
+                    done += len(data)
+                    if callback:
+                        callback(done, size)
+
+        if self.perm_override:
+            self.pm.with_read_access(remote, op)
+        else:
+            op()
+
+    def _upload_file(self, local, remote, callback, resume=False):
+        """アップロード 1 ファイル。resume 時はリモートの続きへ追記。"""
+        size = os.path.getsize(local) if os.path.exists(local) else 0
+        offset = 0
+        if resume:
+            try:
+                offset = self.sftp.stat(remote).st_size or 0
+            except IOError:
+                offset = 0
+        if not (0 < offset < size):
+            self._put_ov(local, remote, callback)
+            return
+
+        def op():
+            with open(local, "rb") as lf, self.sftp.open(remote, "ab") as rf:
+                lf.seek(offset)
+                done = offset
+                while True:
+                    data = lf.read(RESUME_CHUNK)
+                    if not data:
+                        break
+                    rf.write(data)
+                    done += len(data)
+                    if callback:
+                        callback(done, size)
+
         if self.perm_override:
             self.pm.with_write_access(remote, op)
         else:
@@ -416,6 +507,7 @@ class SftpWorker(QThread):
 
     def _job_upload(self, job):
         files = job["files"]
+        resume = bool(job.get("resume"))
         self._ensure_remote_dirs(job.get("dirs", []))
         total = sum(os.path.getsize(l) for l, _ in files if os.path.exists(l))
         done_before = 0
@@ -428,7 +520,7 @@ class SftpWorker(QThread):
                 self._check_cancel()
                 self._emit_progress(_label, _base + sent, total)
 
-            self._put_ov(local, remote, cb)
+            self._upload_file(local, remote, cb, resume=resume)
             done_before += size
         self._emit_progress("", 0, 0, force=True)
         self.progress.emit(IDLE_PROGRESS)
@@ -462,6 +554,7 @@ class SftpWorker(QThread):
                     size = 0
                 plan.append((remote, local, size))
         total = sum(s for _, _, s in plan)
+        resume = bool(job.get("resume"))
         done_before = 0
         for i, (remote, local, size) in enumerate(plan):
             self._check_cancel()
@@ -472,7 +565,7 @@ class SftpWorker(QThread):
                 self._check_cancel()
                 self._emit_progress(_label, _base + got, total)
 
-            self._get_ov(remote, local, cb)
+            self._download_file(remote, local, size, cb, resume=resume)
             done_before += size
         self.progress.emit(IDLE_PROGRESS)
         self.status.emit(f"ダウンロード完了 ({len(plan)} ファイル)")
@@ -661,6 +754,8 @@ class SftpBrowser(QWidget):
         self.nav.job_done.connect(self._on_job_done)
         self.xfer.progress.connect(self._on_progress)
         self.xfer.job_done.connect(self._on_job_done)
+        self.xfer.job_started.connect(self.queue.mark_running)
+        self.xfer.job_finished.connect(self._on_queue_job_finished)
         self.xfer.opened_temp.connect(self._on_opened_temp)
         self.xfer.opened_for_edit.connect(self._on_opened_for_edit)
         self.xfer.editor_save_result.connect(self._on_editor_saved)
@@ -746,7 +841,22 @@ class SftpBrowser(QWidget):
         self.btn_override.setStyleSheet(
             "QPushButton:checked { background:#7a3b3b; font-weight:bold; }")
         bar2.addWidget(self.btn_override)
+
+        self.btn_queue = QPushButton("転送キュー")
+        self.btn_queue.setCheckable(True)
+        self.btn_queue.setToolTip("転送ジョブの一覧 (待機/実行/完了/失敗) を表示")
+        self.btn_queue.toggled.connect(self._toggle_queue_panel)
+        bar2.addWidget(self.btn_queue)
         root.addLayout(bar2)
+
+        # 転送キューの台帳と一覧パネル
+        self.queue = TransferQueue(self)
+        self.queue_panel = TransferQueuePanel(self.queue)
+        self.queue_panel.setMaximumHeight(160)
+        self.queue_panel.cancel_requested.connect(self._cancel_queue_job)
+        self.queue_panel.resume_requested.connect(self._resume_queue_job)
+        self.queue_panel.hide()
+        root.addWidget(self.queue_panel)
 
         self.tree = _DropTree()
         self.tree.setHeaderLabels(["名前", "サイズ", "更新日時", "属性"])
@@ -790,6 +900,44 @@ class SftpBrowser(QWidget):
         QShortcut(QKeySequence(Qt.Key_Delete), self.tree, self.delete_selected)
         QShortcut(QKeySequence(Qt.Key_F2), self.tree, self.rename_selected)
         QShortcut(QKeySequence(Qt.Key_Backspace), self.tree, self.go_up)
+
+    # ---- 転送キュー ---------------------------------------------------------
+    def _toggle_queue_panel(self, on: bool):
+        self.queue_panel.setVisible(on)
+
+    def _enqueue_xfer(self, kind: str, payload: dict, label: str):
+        """転送系ジョブを台帳に登録してから xfer へ投入する。"""
+        job = self.queue.add(kind, label, dict(payload))
+        payload = dict(payload)
+        payload["id"] = job.id
+        payload["kind"] = kind
+        self.xfer.enqueue(payload)
+
+    def _on_queue_job_finished(self, job_id, outcome: str, message: str):
+        if outcome == "done":
+            self.queue.mark_done(job_id)
+        elif outcome == "cancelled":
+            self.queue.mark_cancelled(job_id)
+        else:
+            self.queue.mark_failed(job_id, message)
+
+    def _cancel_queue_job(self, job_id):
+        self.xfer.cancel_job(job_id)
+        job = self.queue.get(job_id)
+        if job is not None and job.state == "waiting":
+            self.queue.mark_cancelled(job_id)
+
+    def _resume_queue_job(self, job_id):
+        """失敗 / キャンセルした転送を部分ファイルの続きから再実行する。"""
+        job = self.queue.get(job_id)
+        if job is None or not job.resumable:
+            return
+        self.queue.mark_waiting(job_id)
+        payload = dict(job.payload)
+        payload["id"] = job.id
+        payload["kind"] = job.kind
+        payload["resume"] = True
+        self.xfer.enqueue(payload)
 
     # ---- 一覧表示 ----------------------------------------------------------
     def _on_home(self, home: str):
@@ -1054,7 +1202,8 @@ class SftpBrowser(QWidget):
             (posixpath.join(self.cwd, e["name"]), e["is_dir"] and not e["is_link"])
             for e in sel
         ]
-        self.xfer.enqueue({"kind": "delete", "items": items})
+        self._enqueue_xfer("delete", {"items": items},
+                           f"{len(items)} 項目の削除")
 
     # ---- アップロード (上書きは 2 段階確認) ------------------------------------------
     def _pick_upload(self):
@@ -1078,7 +1227,8 @@ class SftpBrowser(QWidget):
         conflicts = plan["conflicts"]
         files, dirs = plan["files"], plan["dirs"]
         if not conflicts:
-            self.xfer.enqueue({"kind": "upload", "files": files, "dirs": dirs})
+            self._enqueue_xfer("upload", {"files": files, "dirs": dirs},
+                               self._upload_label(files))
             return
         rows = []
         for c in conflicts[:8]:
@@ -1112,14 +1262,30 @@ class SftpBrowser(QWidget):
                 "overwrite", "上書きする",
             ):
                 return
-            self.xfer.enqueue({"kind": "upload", "files": files, "dirs": dirs})
+            self._enqueue_xfer("upload", {"files": files, "dirs": dirs},
+                               self._upload_label(files))
         elif clicked is b_skip:
             conflict_remotes = {c["remote"] for c in conflicts}
             remain = [(l, r) for l, r in files if r not in conflict_remotes]
             if not remain and not dirs:
                 self._on_status("送信するファイルがありません")
                 return
-            self.xfer.enqueue({"kind": "upload", "files": remain, "dirs": dirs})
+            self._enqueue_xfer("upload", {"files": remain, "dirs": dirs},
+                               self._upload_label(remain))
+
+    @staticmethod
+    def _upload_label(files: list) -> str:
+        if not files:
+            return "アップロード"
+        first = os.path.basename(files[0][0])
+        return first if len(files) == 1 else f"{first} ほか {len(files) - 1} 件"
+
+    @staticmethod
+    def _download_label(items: list) -> str:
+        if not items:
+            return "ダウンロード"
+        first = posixpath.basename(items[0][0])
+        return first if len(items) == 1 else f"{first} ほか {len(items) - 1} 件"
 
     # ---- ダウンロード (ローカル上書きも 2 段階確認) ------------------------------------
     def download_selected(self):
@@ -1170,11 +1336,8 @@ class SftpBrowser(QWidget):
                 "overwrite", "上書きする",
             ):
                 return
-        self.xfer.enqueue({
-            "kind": "download",
-            "destination": dest,
-            "items": items,
-        })
+        self._enqueue_xfer("download", {"items": items, "destination": dest},
+                           self._download_label(items))
 
     # ---- コンテキストメニュー ------------------------------------------------------
     def _context_menu(self, pos):
@@ -1234,6 +1397,9 @@ class SftpBrowser(QWidget):
         self.lb_progress.setText(info["label"])
         self.pb.setMaximum(info["total"])
         self.pb.setValue(min(info["done"], info["total"]))
+        running = self.queue.running_job()
+        if running is not None:
+            self.queue.update_progress(running.id, info["done"], info["total"])
 
     def _on_status(self, msg: str):
         self.lb_status.setText(msg)
