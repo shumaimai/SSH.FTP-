@@ -47,7 +47,13 @@ def resolve_profile(profile: Profile, path: Path | None = None) -> Profile:
 
     entry = cfg.lookup(profile.host)
 
-    if "proxyjump" in entry or "proxycommand" in entry:
+    # ProxyJump/ProxyCommand は未対応だが、値 "none" は OpenSSH で
+    # 「継承したプロキシを打ち消す(=直接接続でよい)」正規の指定なので拒否しない。
+    def _wants_proxy(key: str) -> bool:
+        val = entry.get(key)
+        return bool(val) and str(val).strip().lower() != "none"
+
+    if _wants_proxy("proxyjump") or _wants_proxy("proxycommand"):
         raise UnsupportedOption(
             f"~/.ssh/config の {profile.host} に ProxyJump/ProxyCommand が"
             "指定されていますが、Hashi は多段接続に未対応です。"
