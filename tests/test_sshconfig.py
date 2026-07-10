@@ -19,6 +19,11 @@ Host proxied
     HostName 10.0.0.6
     ProxyCommand ssh -W %h:%p bastion
 
+Host no-proxy
+    HostName 10.0.0.7
+    User direct
+    ProxyJump none
+
 Host *
     User fallback
 """
@@ -76,6 +81,13 @@ def test_proxyjump_is_rejected_not_ignored(cfg):
         resolve_profile(Profile(host="jump-needed", username="u"), cfg)
     with pytest.raises(UnsupportedOption):
         resolve_profile(Profile(host="proxied", username="u"), cfg)
+
+
+def test_proxyjump_none_is_allowed(cfg):
+    """ProxyJump none は「プロキシを打ち消す」正規指定なので拒否しない。"""
+    r = resolve_profile(Profile(host="no-proxy"), cfg)
+    assert r.host == "10.0.0.7"
+    assert r.username == "direct"
 
 
 def test_ssh_core_uses_resolution(tmp_path, monkeypatch):
