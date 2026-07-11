@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTabWidget,
@@ -178,6 +179,35 @@ class SecretContext:
                 self.credentials.set(self.profile, "sudo", pw)
         self._sudo_pw = pw
         return pw
+
+
+class ConnectingWidget(QWidget):
+    """接続処理中と結果を表示するページ。"""
+
+    def __init__(self, profile: Profile, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setAlignment(Qt.AlignCenter)
+        root.setSpacing(12)
+
+        self.message = QLabel(f"{profile.label()} に接続しています…")
+        self.message.setAlignment(Qt.AlignCenter)
+        self.message.setStyleSheet("font-size:16px;")
+        root.addWidget(self.message)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedWidth(280)
+        root.addWidget(self.progress, 0, Qt.AlignCenter)
+
+    def show_error(self, message: str):
+        if message:
+            text = f"接続に失敗しました:\n{message}"
+        else:
+            text = "接続を中止しました"
+        self.message.setText(text)
+        self.message.setStyleSheet("color:#e06c75; font-size:16px;")
+        self.progress.hide()
 
 
 class SessionTab(QWidget):
@@ -401,6 +431,7 @@ class MainWindow(QMainWindow):
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setStyleSheet("color:#8a919e; font-size:14px;")
         self.tabs.addTab(placeholder, "ようこそ")
+        self._welcome_page = placeholder
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(side)
@@ -543,6 +574,9 @@ class MainWindow(QMainWindow):
     # ---- 接続 --------------------------------------------------------------
     def _connect_profile(self, profile: Profile):
         self.statusBar().showMessage(f"{profile.label()} に接続中…")
+        connecting = ConnectingWidget(profile)
+        connect_idx = self.tabs.addTab(connecting, f"接続中: {profile.label()}")
+        self.tabs.setCurrentIndex(connect_idx)
         worker = ConnectWorker(profile, self.known_hosts, self.credentials)
         worker.ask_secret.connect(
             lambda prompt, ds, cs, w=worker:
@@ -551,23 +585,38 @@ class MainWindow(QMainWindow):
         worker.ask_hostkey.connect(
             lambda info, w=worker: w.provide(HostKeyDialog.ask(self, info))
         )
-        worker.ok.connect(lambda s, w=worker: self._on_connected(s, w))
-        worker.fail.connect(self._on_connect_failed)
+        worker.ok.connect(
+            lambda s, w=worker, page=connecting: self._on_connected(s, w, page)
+        )
+        worker.fail.connect(
+            lambda msg, page=connecting, p=profile:
+            self._on_connect_failed(msg, page, p)
+        )
         worker.finished.connect(lambda w=worker: self._workers.remove(w))
         self._workers.append(worker)
         worker.start()
 
-    def _on_connected(self, session: SshSession, worker: ConnectWorker):
-        # 初回接続でようこそタブを消す
-        if self.tabs.count() == 1 and not isinstance(self.tabs.widget(0), SessionTab):
-            self.tabs.removeTab(0)
+    def _on_connected(self, session: SshSession, worker: ConnectWorker,
+                      connecting: ConnectingWidget | None = None):
+        if self._welcome_page is not None:
+            welcome_idx = self.tabs.indexOf(self._welcome_page)
+            if welcome_idx >= 0:
+                self.tabs.removeTab(welcome_idx)
+            self._welcome_page.deleteLater()
+            self._welcome_page = None
         ctx = SecretContext(session.profile, self.credentials,
                             self.settings, self)
         if worker.used_password:
             ctx.note_login_password(worker.used_password)
         tab = SessionTab(session, self.settings, ctx)
         label = session.profile.label()
-        idx = self.tabs.addTab(tab, label)
+        idx = self.tabs.indexOf(connecting) if connecting is not None else -1
+        if idx >= 0:
+            self.tabs.removeTab(idx)
+            connecting.deleteLater()
+            idx = self.tabs.insertTab(idx, tab, label)
+        else:
+            idx = self.tabs.addTab(tab, label)
         self.tabs.setCurrentIndex(idx)
         tab.terminal.session_closed.connect(
             lambda i=idx: self._mark_disconnected(tab)
@@ -579,10 +628,22 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.tabs.setTabText(idx, self.tabs.tabText(idx) + " (切断)")
 
-    def _on_connect_failed(self, msg: str):
-        self.statusBar().showMessage("接続を中止しました", 4000)
-        if msg:
+    def _on_connect_failed(self, msg: str,
+                           connecting: ConnectingWidget | None = None,
+                           profile: Profile | None = None):
+        connecting_idx = -1
+        if connecting is not None:
+            connecting_idx = self.tabs.indexOf(connecting)
+            if connecting_idx >= 0:
+                connecting.show_error(msg)
+                if profile is not None:
+                    state = "接続失敗" if msg else "接続中止"
+                    self.tabs.setTabText(
+                        connecting_idx, f"{state}: {profile.label()}")
+        if msg and connecting_idx < 0:
             QMessageBox.warning(self, "接続エラー", msg)
+        self.statusBar().showMessage(
+            "接続に失敗しました" if msg else "接続を中止しました", 4000)
 
     # ---- タブ/終了 -----------------------------------------------------------
     def _close_tab(self, index: int):
