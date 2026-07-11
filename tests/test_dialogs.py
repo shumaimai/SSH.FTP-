@@ -1,5 +1,5 @@
 from hashi.config import AUTH_AGENT, AUTH_KEY, AUTH_PASSWORD, Profile
-from hashi.dialogs import ConnectDialog
+from hashi.dialogs import ConnectDialog, KeygenDialog
 
 
 class FakeCredentials:
@@ -104,3 +104,32 @@ def test_switching_auth_method_updates_visible_rows(qapp):
     assert dialog._key_row.isHidden()
     assert dialog.ed_password.isHidden()
     assert dialog.ed_passphrase.isHidden()
+
+
+def test_keygen_dialog_uses_result_settings_and_confirms_overwrite(qapp, tmp_path, monkeypatch):
+    import hashi.dialogs as dialogs
+
+    existing = tmp_path / "id_ed25519"
+    existing.write_text("old")
+    dialog = KeygenDialog()
+    dialog.ed_path.setText(str(existing))
+    accepted = []
+    dialog.accept = lambda: accepted.append(True)
+
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "question",
+        lambda *args, **kwargs: dialogs.QMessageBox.No,
+    )
+    dialog._validate_accept()
+    assert accepted == []
+    assert callable(dialog.result)
+    assert dialog.result_settings()["path"] == str(existing)
+
+    monkeypatch.setattr(
+        dialogs.QMessageBox,
+        "question",
+        lambda *args, **kwargs: dialogs.QMessageBox.Yes,
+    )
+    dialog._validate_accept()
+    assert accepted == [True]

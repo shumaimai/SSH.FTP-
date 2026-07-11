@@ -1,0 +1,127 @@
+import paramiko
+
+from hashi.keygen import (
+    KeygenError,
+    generate_key,
+    public_key_line,
+    register_public_key,
+)
+
+
+def test_generate_ed25519_with_passphrase(tmp_path):
+    path = tmp_path / "id_ed25519"
+    generated = generate_key(
+        "ed25519", passphrase="秘密", comment="テスト", path=path
+    )
+
+    assert isinstance(generated.pkey, paramiko.Ed25519Key)
+    assert generated.public_line.startswith("ssh-ed25519 ")
+    assert generated.public_line.endswith(" テスト")
+    assert path.stat().st_mode & 0o777 == 0o600
+    loaded = paramiko.Ed25519Key.from_private_key_file(str(path), password="秘密")
+    assert loaded.get_base64() == generated.pkey.get_base64()
+
+
+def test_generate_ecdsa_and_rsa(tmp_path):
+    ecdsa = generate_key("ecdsa", bits=256, path=tmp_path / "ecdsa")
+    rsa = generate_key("rsa", bits=2048, path=tmp_path / "rsa")
+
+    assert isinstance(ecdsa.pkey, paramiko.ECDSAKey)
+    assert ecdsa.public_line.startswith("ecdsa-sha2-nistp256 ")
+    assert isinstance(rsa.pkey, paramiko.RSAKey)
+    assert rsa.public_line.startswith("ssh-rsa ")
+
+
+def test_public_key_line_omits_empty_comment():
+    key = generate_key("ed25519").pkey
+
+    assert public_key_line(key).count(" ") == 1
+    assert public_key_line(key, "  host  ").endswith(" host")
+
+
+class _RemoteFile:
+    def __init__(self, sftp, path, mode):
+        self.sftp = sftp
+        self.path = path
+        self.mode = mode
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return self.sftp.files.get(self.path, b"")
+
+    def write(self, content):
+        self.sftp.files[self.path] = content
+
+
+class _FakeSftp:
+    def __init__(self, files=None):
+        self.files = files or {}
+        self.directories = set()
+        self.modes = {}
+
+    def stat(self, path):
+        if path not in self.directories:
+            raise OSError(2, "not found")
+        return object()
+
+    def mkdir(self, path, mode=0o777):
+        self.directories.add(path)
+        self.modes[path] = mode
+
+    def chmod(self, path, mode):
+        self.modes[path] = mode
+
+    def open(self, path, mode):
+        if "r" in mode and path not in self.files:
+            raise OSError(2, "not found")
+        return _RemoteFile(self, path, mode)
+
+    def close(self):
+        pass
+
+
+class _FakeSession:
+    def __init__(self, sftp):
+        self.sftp = sftp
+
+    def exec_command(self, command):
+        assert command == 'printf "%s" "$HOME"'
+        return 0, "/home/tester\n", ""
+
+    def open_sftp(self):
+        return self.sftp
+
+
+def test_register_public_key_appends_and_avoids_duplicate():
+    key = generate_key("ed25519").pkey
+    line = public_key_line(key, "test")
+    sftp = _FakeSftp()
+    session = _FakeSession(sftp)
+
+    assert register_public_key(session, line) is True
+    path = "/home/tester/.ssh/authorized_keys"
+    assert sftp.files[path].decode().splitlines() == [line]
+    assert sftp.modes["/home/tester/.ssh"] == 0o700
+    assert sftp.modes[path] == 0o600
+    assert register_public_key(session, line + " changed-comment") is False
+    assert sftp.files[path].decode().splitlines() == [line]
+    sftp.files[path] = f'from="host" {line}\n'.encode()
+    assert register_public_key(session, line + " another-comment") is False
+
+
+def test_register_public_key_reports_lost_connection():
+    class DroppedSession:
+        def exec_command(self, _command):
+            raise AssertionError
+
+    try:
+        register_public_key(DroppedSession(), "ssh-ed25519 AAAA")
+    except KeygenError as exc:
+        assert str(exc) == "接続が失われました。再接続してから実行してください。"
+    else:
+        raise AssertionError("KeygenError が送出されませんでした")
