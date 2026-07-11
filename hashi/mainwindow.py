@@ -306,6 +306,7 @@ class SessionTab(QWidget):
 
         self.bt_term.toggled.connect(self._apply_visibility)
         self.bt_files.toggled.connect(self._apply_visibility)
+        self.browser.terminal_input.connect(self.terminal.send_text)
         self.terminal.password_prompt.connect(self._on_password_prompt)
 
         # トースト(通知)

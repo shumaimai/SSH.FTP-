@@ -93,6 +93,11 @@ def _safe_local_child(root: str, parent: str, name: str) -> str:
     return candidate
 
 
+def _quote_posix_shell_path(path: str) -> str:
+    """POSIX シェルへ渡すパスを安全にクォートする。"""
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
 class _Cancelled(Exception):
     pass
 
@@ -739,6 +744,7 @@ class SftpBrowser(QWidget):
     """SFTP ブラウザ本体。"""
 
     status_message = Signal(str)
+    terminal_input = Signal(str)
 
     def __init__(self, session, initial_path: str = "", settings=None,
                  sudo_provider=None, sudo_provider_silent=None, parent=None):
@@ -1045,6 +1051,30 @@ class SftpBrowser(QWidget):
 
     def _selected_entries(self) -> list[dict]:
         return [it.data(0, Qt.UserRole + 2) for it in self.tree.selectedItems()]
+
+    def _selected_remote_paths(self) -> list[str]:
+        return [
+            posixpath.join(self.cwd, entry["name"])
+            for entry in self._selected_entries()
+        ]
+
+    def _terminal_target_path(self, for_cd: bool = False) -> str:
+        selected = self._selected_entries()
+        if not selected:
+            return self.cwd
+        path = posixpath.join(self.cwd, selected[0]["name"])
+        if for_cd and not selected[0]["is_dir"]:
+            path = posixpath.dirname(path) or "/"
+        return path
+
+    def _send_terminal_path(self, newline: bool):
+        path = self._terminal_target_path(for_cd=newline)
+        if not path:
+            return
+        text = _quote_posix_shell_path(path)
+        if newline:
+            text = "cd " + text + "\n"
+        self.terminal_input.emit(text)
 
     # ---- ナビゲーション -------------------------------------------------------
     def cd(self, path: str):
@@ -1382,12 +1412,16 @@ class SftpBrowser(QWidget):
         a_del = menu.addAction("削除 (Del)")
         menu.addSeparator()
         a_new = menu.addAction("新規フォルダ")
-        a_copy = menu.addAction("パスをコピー")
+        a_copy = menu.addAction("リモートパスをコピー")
+        a_cd = menu.addAction("ターミナルでこのディレクトリへ移動")
+        a_insert = menu.addAction("ターミナルにパスを挿入")
         a_ref = menu.addAction("更新 (F5)")
         a_dl.setEnabled(bool(sel))
         a_ren.setEnabled(len(sel) == 1)
         a_del.setEnabled(bool(sel))
-        a_copy.setEnabled(bool(sel))
+        a_copy.setEnabled(bool(sel) or bool(self.cwd))
+        a_cd.setEnabled(len(sel) <= 1 and bool(self.cwd))
+        a_insert.setEnabled(len(sel) <= 1 and bool(self.cwd))
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
         if chosen is a_edit and one_file:
             full = posixpath.join(self.cwd, sel[0]["name"])
@@ -1413,8 +1447,12 @@ class SftpBrowser(QWidget):
         elif chosen is a_copy:
             from PySide6.QtGui import QGuiApplication
             QGuiApplication.clipboard().setText(
-                "\n".join(posixpath.join(self.cwd, e["name"]) for e in sel)
+                "\n".join(self._selected_remote_paths() or [self.cwd])
             )
+        elif chosen is a_cd:
+            self._send_terminal_path(newline=True)
+        elif chosen is a_insert:
+            self._send_terminal_path(newline=False)
 
     # ---- 進捗/ステータス ----------------------------------------------------------
     def _on_progress(self, info: dict):

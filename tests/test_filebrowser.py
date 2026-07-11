@@ -1,5 +1,70 @@
-"""filebrowser.py の外部アプリ変更監視テスト。"""
+"""filebrowser.py のテスト。"""
 import os
+
+
+def test_quote_posix_shell_path():
+    from hashi.filebrowser import _quote_posix_shell_path
+
+    assert _quote_posix_shell_path("/srv/my files") == "'/srv/my files'"
+    assert _quote_posix_shell_path("/srv/user's files") == "'/srv/user'\\''s files'"
+
+
+def test_terminal_target_uses_parent_for_files():
+    from hashi.filebrowser import SftpBrowser
+
+    class Browser:
+        cwd = "/srv/work"
+        _terminal_target_path = SftpBrowser._terminal_target_path
+
+        def __init__(self, entries):
+            self.entries = entries
+
+        def _selected_entries(self):
+            return self.entries
+
+    assert Browser([])._terminal_target_path() == "/srv/work"
+    assert Browser([{"name": "folder", "is_dir": True}])._terminal_target_path() == (
+        "/srv/work/folder"
+    )
+    assert Browser([{"name": "notes.txt", "is_dir": False}])._terminal_target_path(
+        for_cd=True
+    ) == (
+        "/srv/work"
+    )
+    assert Browser([{"name": "notes.txt", "is_dir": False}])._terminal_target_path() == (
+        "/srv/work/notes.txt"
+    )
+
+
+def test_terminal_path_signal_emits_shell_quoted_input(qapp):
+    from PySide6.QtWidgets import QWidget
+
+    from hashi.filebrowser import SftpBrowser
+
+    browser = SftpBrowser.__new__(SftpBrowser)
+    QWidget.__init__(browser)
+    browser.cwd = "/srv/user's files"
+    browser._selected_entries = lambda: [
+        {"name": "project", "is_dir": True},
+    ]
+    emitted = []
+    browser.terminal_input.connect(emitted.append)
+
+    browser._send_terminal_path(newline=True)
+    browser._send_terminal_path(newline=False)
+    browser._selected_entries = lambda: [
+        {"name": "notes.txt", "is_dir": False},
+    ]
+    browser._send_terminal_path(newline=True)
+    browser._send_terminal_path(newline=False)
+
+    assert emitted == [
+        "cd '/srv/user'\\''s files/project'\n",
+        "'/srv/user'\\''s files/project'",
+        "cd '/srv/user'\\''s files'\n",
+        "'/srv/user'\\''s files/notes.txt'",
+    ]
+    browser.deleteLater()
 
 
 def test_external_file_monitor_emits_only_for_new_content(qapp, tmp_path):
