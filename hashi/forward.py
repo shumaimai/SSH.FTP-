@@ -68,12 +68,15 @@ def _pump_stream(sock: socket.socket, chan):
             return b""
 
     while True:
+        # 読み取りは両方 select で待てる。書き込みは real socket だけ select の
+        # 書き込みリストに入れられる。paramiko チャネルの fileno() は内部パイプの
+        # 読み取り端なので select の書き込みリストでは「書ける」と報告されず、
+        # ここに入れると返り(sock→chan)経路が永久に流れない。チャネルの送信可否は
+        # send_ready() だけで判断し、直接 send する。
         rlist = [sock, chan]
         wlist = []
         if to_sock and _send_ready(sock):
             wlist.append(sock)
-        if to_chan and _send_ready(chan):
-            wlist.append(chan)
 
         timeout = 0.1 if (to_chan or to_sock) else 1.0
         try:
@@ -87,11 +90,12 @@ def _pump_stream(sock: socket.socket, chan):
                 break
             to_sock = to_sock[sent:]
 
-        if chan in w and to_chan:
+        if to_chan and _send_ready(chan):
             sent = _send(chan, to_chan)
-            if sent is None or sent == 0:
+            if sent is None:
                 break
-            to_chan = to_chan[sent:]
+            if sent:
+                to_chan = to_chan[sent:]
 
         if sock in r:
             data = _recv(sock, 16384)

@@ -260,6 +260,95 @@ def _wait_for_remote_forward(fwd: RemoteForward, timeout: float = 5.0) -> bool:
     return False
 
 
+class _PipeChannel:
+    """paramiko チャネルの select 特性を再現するフェイク。
+
+    本物の paramiko チャネルの fileno() は内部パイプの読み取り端なので、
+    「データ到着で読み取り可能」にはなるが「書き込みリストで select しても
+    書き込み可能にはならない」。FakeChannel は実ソケットを使うためこの差が
+    出ず、_pump_stream が chan を select の書き込みリストに入れていたバグを
+    見逃していた。このフェイクは fileno にパイプ読み取り端を使うことで、
+    返り(sock→chan)経路が send_ready() 経由で正しく流れることを検証する。
+    """
+
+    def __init__(self):
+        self._r, self._w = os.pipe()
+        self._inbox = bytearray()   # recv() で返すデータ
+        self.outbox = bytearray()   # send() されたデータ(検証用)
+        self.closed = False
+        self.eof_received = False
+        self._lock = threading.Lock()
+
+    def feed(self, data: bytes):
+        with self._lock:
+            self._inbox += data
+        os.write(self._w, b"\x00")  # 読み取り可能シグナル
+
+    def fileno(self):
+        return self._r
+
+    def setblocking(self, flag):
+        pass
+
+    def recv_ready(self):
+        r, _, _ = select.select([self._r], [], [], 0)
+        return bool(r)
+
+    def recv(self, n):
+        try:
+            os.read(self._r, 1)  # シグナルを1つ消費
+        except OSError:
+            pass
+        with self._lock:
+            data = bytes(self._inbox[:n])
+            del self._inbox[:n]
+        return data
+
+    def send_ready(self):
+        return not self.closed
+
+    def send(self, data):
+        self.outbox += data
+        return len(data)
+
+    def close(self):
+        self.closed = True
+        for fd in (self._r, self._w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def test_pump_stream_return_path_via_send_ready():
+    """返り(sock→chan)経路が、select 書き込み不可なチャネルでも流れる。
+
+    回帰: _pump_stream が chan を select の書き込みリストに入れていたため、
+    paramiko チャネル(fileno が書き込み select 不可)では応答が返らなかった。
+    """
+    from hashi.forward import _pump_stream
+
+    a, b = socket.socketpair()  # a=sock 側、b=テストの相手
+    chan = _PipeChannel()
+    th = threading.Thread(target=_pump_stream, args=(a, chan), daemon=True)
+    th.start()
+    try:
+        # sock 側(b)へ「応答」を書く → pump が読み取り to_chan へ → chan.send へ
+        b.sendall(b"RESPONSE-BYTES")
+        deadline = time.time() + 5
+        while bytes(chan.outbox) != b"RESPONSE-BYTES" and time.time() < deadline:
+            time.sleep(0.05)
+        assert bytes(chan.outbox) == b"RESPONSE-BYTES"
+
+        # 往路(chan→sock)も流れる
+        chan.feed(b"REQUEST-BYTES")
+        assert _recv_exact(b, len(b"REQUEST-BYTES")) == b"REQUEST-BYTES"
+    finally:
+        chan.close()
+        b.close()
+        a.close()
+
+
 def test_remote_forward_roundtrip(echo_server):
     """リモート待受ポートへ接続すると、ローカル転送先と往復する。"""
     host, port = echo_server
