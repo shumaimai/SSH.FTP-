@@ -114,10 +114,15 @@ class _TerminalScreen(pyte.HistoryScreen):
 
     _BRACKETED_PASTE_MODE = 2004
     _ALT_SCREEN_MODES = frozenset({47, 1047, 1049})
+    # マウスレポート: 1000=クリック / 1002=ボタン押下中の移動も / 1003=常に移動も
+    _MOUSE_MODES = frozenset({1000, 1002, 1003})
+    _MOUSE_SGR_MODE = 1006   # SGR 拡張座標 (223 桁制限なし)
 
     def __init__(self, *args, **kwargs):
         self.bracketed_paste = False
         self.in_alt_screen = False
+        self.mouse_tracking = 0   # 0=無効 / 1000 / 1002 / 1003
+        self.mouse_sgr = False
         self._main_buffer = None
         self._main_history = None
         self._saved_cursor = None
@@ -126,6 +131,8 @@ class _TerminalScreen(pyte.HistoryScreen):
     def reset(self):
         self.bracketed_paste = False
         self.in_alt_screen = False
+        self.mouse_tracking = 0
+        self.mouse_sgr = False
         self._main_buffer = None
         self._main_history = None
         self._saved_cursor = None
@@ -136,6 +143,12 @@ class _TerminalScreen(pyte.HistoryScreen):
             self._enter_alt_screen(save_cursor=1049 in modes)
         if private and self._BRACKETED_PASTE_MODE in modes:
             self.bracketed_paste = True
+        if private:
+            for m in modes:
+                if m in self._MOUSE_MODES:
+                    self.mouse_tracking = m
+                elif m == self._MOUSE_SGR_MODE:
+                    self.mouse_sgr = True
         super().set_mode(*modes, private=private)
 
     def reset_mode(self, *modes, private=False):
@@ -143,6 +156,12 @@ class _TerminalScreen(pyte.HistoryScreen):
             self._exit_alt_screen(restore_cursor=1049 in modes)
         if private and self._BRACKETED_PASTE_MODE in modes:
             self.bracketed_paste = False
+        if private:
+            for m in modes:
+                if m in self._MOUSE_MODES:
+                    self.mouse_tracking = 0
+                elif m == self._MOUSE_SGR_MODE:
+                    self.mouse_sgr = False
         super().reset_mode(*modes, private=private)
 
     def _enter_alt_screen(self, save_cursor):
@@ -235,6 +254,8 @@ class TerminalWidget(QWidget):
 
         self._sel_anchor: tuple[int, int] | None = None  # (row, col)
         self._sel_end: tuple[int, int] | None = None
+        self._mouse_pressed_code: int | None = None   # レポート送信済みの押下ボタン
+        self._last_mouse_cell: tuple[int, int] | None = None
         self._preedit = ""  # IME 変換中文字列
         self._last_title = ""
         self._right_click_paste = right_click_paste
@@ -410,6 +431,12 @@ class TerminalWidget(QWidget):
         self._dirty = True
 
     def wheelEvent(self, ev):
+        if self._mouse_report_active(ev.modifiers()):
+            # ホイールは 64 (上) / 65 (下)。押下イベントのみでリリースなし
+            code = 64 if ev.angleDelta().y() > 0 else 65
+            self._send_mouse(code, ev.position().toPoint(), pressed=True)
+            ev.accept()
+            return
         if ev.angleDelta().y() > 0:
             self.screen.prev_page()
         else:
@@ -504,8 +531,53 @@ class TerminalWidget(QWidget):
         row = max(0, min(self._rows - 1, int(pos.y() / self._chh)))
         return row, col
 
+    # ---- マウスレポート (xterm 互換。Issue #6) --------------------------------
+    # アプリ (vim / htop 等) が ?1000/?1002/?1003 を有効にしている間は
+    # マウスイベントをエスケープシーケンスでリモートへ送る。
+    # Shift 併用時はレポートを迂回してローカル操作 (選択/貼り付け) にする (xterm 流)。
+
+    _QT_MOUSE_BTN = {Qt.LeftButton: 0, Qt.MiddleButton: 1, Qt.RightButton: 2}
+
+    def _mouse_report_active(self, modifiers) -> bool:
+        return (getattr(self.screen, "mouse_tracking", 0) != 0
+                and not (modifiers & Qt.ShiftModifier)
+                and self._channel is not None and not self._closed)
+
+    @staticmethod
+    def _mouse_modifier_bits(modifiers) -> int:
+        bits = 0
+        if modifiers & Qt.AltModifier:
+            bits += 8
+        if modifiers & Qt.ControlModifier:
+            bits += 16
+        return bits
+
+    def _send_mouse(self, btn_code: int, pos: QPoint, pressed: bool,
+                    motion: bool = False):
+        row, col = self._cell_at(pos)
+        x, y = col + 1, row + 1
+        b = btn_code + (32 if motion else 0)
+        if getattr(self.screen, "mouse_sgr", False):
+            suffix = "M" if pressed else "m"
+            self.send_bytes(f"\x1b[<{b};{x};{y}{suffix}".encode("ascii"))
+        else:
+            # 旧形式: リリースはボタン番号 3。座標は 223 まで (超えたら送らない)
+            if not pressed:
+                b = (b & ~0b11) | 3
+            if x > 223 or y > 223:
+                return
+            self.send_bytes(b"\x1b[M" + bytes([32 + b, 32 + x, 32 + y]))
+
     def mousePressEvent(self, ev):
         self.setFocus()
+        if self._mouse_report_active(ev.modifiers()) \
+                and ev.button() in self._QT_MOUSE_BTN:
+            self._mouse_pressed_code = (self._QT_MOUSE_BTN[ev.button()]
+                                        + self._mouse_modifier_bits(ev.modifiers()))
+            self._last_mouse_cell = self._cell_at(ev.position().toPoint())
+            self._send_mouse(self._mouse_pressed_code,
+                             ev.position().toPoint(), pressed=True)
+            return
         if ev.button() == Qt.LeftButton:
             self._sel_anchor = self._cell_at(ev.position().toPoint())
             self._sel_end = self._sel_anchor
@@ -518,15 +590,38 @@ class TerminalWidget(QWidget):
                 self.paste_clipboard()
 
     def mouseMoveEvent(self, ev):
+        tracking = getattr(self.screen, "mouse_tracking", 0)
+        if self._mouse_report_active(ev.modifiers()) and tracking >= 1002:
+            pressed = getattr(self, "_mouse_pressed_code", None)
+            if tracking == 1002 and pressed is None:
+                return  # 1002 はボタン押下中の移動のみ
+            cell = self._cell_at(ev.position().toPoint())
+            if cell == getattr(self, "_last_mouse_cell", None):
+                return  # 同一セル内の移動は報告しない (洪水防止)
+            self._last_mouse_cell = cell
+            code = pressed if pressed is not None else 3  # 3 = ボタンなし移動
+            self._send_mouse(code, ev.position().toPoint(),
+                             pressed=True, motion=True)
+            return
         if ev.buttons() & Qt.LeftButton and self._sel_anchor is not None:
             self._sel_end = self._cell_at(ev.position().toPoint())
             self._dirty = True
 
     def mouseReleaseEvent(self, ev):
+        pressed = getattr(self, "_mouse_pressed_code", None)
+        if pressed is not None and ev.button() in self._QT_MOUSE_BTN:
+            self._mouse_pressed_code = None
+            if self._channel is not None and not self._closed \
+                    and getattr(self.screen, "mouse_tracking", 0) != 0:
+                self._send_mouse(pressed, ev.position().toPoint(), pressed=False)
+            return
         if ev.button() == Qt.LeftButton and self._has_selection():
             self.copy_selection()  # PuTTY 流: 選択したら即コピー
 
     def contextMenuEvent(self, ev):
+        # マウスレポート中は右クリックもアプリへ送っている (メニューは Shift 併用)
+        if self._mouse_report_active(ev.modifiers()):
+            return
         # 右クリック貼り付けが有効なら Shift 併用時だけメニュー表示
         if self._right_click_paste and not (ev.modifiers() & Qt.ShiftModifier):
             return
