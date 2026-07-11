@@ -24,10 +24,6 @@ SERVICE = "Hashi"
 _KINDS = ("password", "passphrase", "sudo")
 
 
-def _profile_id(profile: Profile) -> str:
-    return f"{profile.username}@{profile.host}:{profile.port}"
-
-
 class _FernetFile:
     """cryptography.Fernet による暗号化ファイルバックエンド。"""
 
@@ -137,7 +133,7 @@ class CredentialStore:
         return self._keyring is not None
 
     def _key(self, profile: Profile, kind: str) -> str:
-        return f"{_profile_id(profile)}:{kind}"
+        return f"{profile.id_str()}:{kind}"
 
     def get(self, profile: Profile, kind: str) -> str | None:
         if kind not in _KINDS:

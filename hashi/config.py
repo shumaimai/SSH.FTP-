@@ -5,13 +5,13 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from . import __version__
+from .jsonio import load_json, save_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -70,23 +70,27 @@ class ProfileStore:
     def load(self) -> None:
         self.profiles = []
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = load_json(
+                self.path,
+                list,
+                logger=logger,
+                warning="profiles.json を読み込めません(無視して続行): %s",
+            )
             for d in data:
                 self.profiles.append(Profile.from_dict(d))
-        except FileNotFoundError:
-            pass
         except Exception:
             # 壊れたファイルは無視(上書き保存で復旧)するが、警告は残す
             logger.warning("profiles.json を読み込めません(無視して続行): %s",
                            self.path, exc_info=True)
+            self.profiles = []
 
     def save(self) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps([asdict(p) for p in self.profiles], ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        save_json_atomic(
+            self.path,
+            [asdict(p) for p in self.profiles],
+            ensure_ascii=False,
+            indent=2,
         )
-        tmp.replace(self.path)
 
     def add(self, p: Profile) -> None:
         self.profiles.append(p)
@@ -120,21 +124,18 @@ class Settings:
         self.load()
 
     def load(self):
-        try:
-            d = json.loads(self.path.read_text(encoding="utf-8"))
-            for k in self.DEFAULTS:
-                if k in d:
-                    self._data[k] = d[k]
-        except FileNotFoundError:
-            pass
-        except Exception:
-            logger.warning("settings.json を読み込めません(既定値で続行): %s",
-                           self.path, exc_info=True)
+        d = load_json(
+            self.path,
+            dict,
+            logger=logger,
+            warning="settings.json を読み込めません(既定値で続行): %s",
+        )
+        for k in self.DEFAULTS:
+            if k in d:
+                self._data[k] = d[k]
 
     def save(self):
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        save_json_atomic(self.path, self._data, indent=2)
 
     def get(self, key: str):
         return self._data.get(key, self.DEFAULTS.get(key))
@@ -156,19 +157,15 @@ class KnownHosts:
         self.load()
 
     def load(self) -> None:
-        try:
-            self._data = json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            self._data = {}
-        except Exception:
-            logger.warning("known_hosts.json を読み込めません(空で続行): %s",
-                           self.path, exc_info=True)
-            self._data = {}
+        self._data = load_json(
+            self.path,
+            dict,
+            logger=logger,
+            warning="known_hosts.json を読み込めません(空で続行): %s",
+        )
 
     def save(self) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-        tmp.replace(self.path)
+        save_json_atomic(self.path, self._data, indent=2)
 
     @staticmethod
     def _key(host: str, port: int) -> str:

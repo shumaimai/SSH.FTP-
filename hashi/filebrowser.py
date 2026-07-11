@@ -303,6 +303,26 @@ class SftpWorker(QThread):
             self._last_emit = now
             self.progress.emit({"label": label, "done": done, "total": max(total, 1)})
 
+    def _progress_callback(self, label: str, total: int, done_before: int = 0):
+        def callback(done, _size):
+            self._check_cancel()
+            self._emit_progress(label, done_before + done, total)
+
+        return callback
+
+    def _download_to_temp(self, job: dict, prefix: str) -> tuple[str, str]:
+        remote = job["remote"]
+        name = posixpath.basename(remote)
+        tmpdir = tempfile.mkdtemp(prefix=prefix)
+        local = os.path.join(tmpdir, name)
+        callback = self._progress_callback(
+            f"開いています: {name}",
+            job.get("size") or 1,
+        )
+        self._get_ov(remote, local, callback)
+        self.progress.emit(IDLE_PROGRESS)
+        return remote, local
+
     # -- 権限無視ラッパ ---------------------------------------------------
     def _listdir_ov(self, path):
         """listdir_attr を権限無視対応で。弾かれたら一時的に読取許可。"""
@@ -315,14 +335,18 @@ class SftpWorker(QThread):
         return holder["r"]
 
     def _get_ov(self, remote, local, callback, is_dir=False):
-        op = lambda: self.sftp.get(remote, local, callback=callback)
+        def op():
+            self.sftp.get(remote, local, callback=callback)
+
         if self.perm_override:
             self.pm.with_read_access(remote, op, is_dir=is_dir)
         else:
             op()
 
     def _put_ov(self, local, remote, callback):
-        op = lambda: self.sftp.put(local, remote, callback=callback)
+        def op():
+            self.sftp.put(local, remote, callback=callback)
+
         if self.perm_override:
             self.pm.with_write_access(remote, op)
         else:
@@ -417,18 +441,21 @@ class SftpWorker(QThread):
     def _job_upload(self, job):
         files = job["files"]
         self._ensure_remote_dirs(job.get("dirs", []))
-        total = sum(os.path.getsize(l) for l, _ in files if os.path.exists(l))
+        total = sum(
+            os.path.getsize(local)
+            for local, _remote in files
+            if os.path.exists(local)
+        )
         done_before = 0
         for i, (local, remote) in enumerate(files):
             self._check_cancel()
             size = os.path.getsize(local) if os.path.exists(local) else 0
             label = f"アップロード {i + 1}/{len(files)}: {os.path.basename(local)}"
-
-            def cb(sent, _sz, _base=done_before, _label=label):
-                self._check_cancel()
-                self._emit_progress(_label, _base + sent, total)
-
-            self._put_ov(local, remote, cb)
+            self._put_ov(
+                local,
+                remote,
+                self._progress_callback(label, total, done_before),
+            )
             done_before += size
         self._emit_progress("", 0, 0, force=True)
         self.progress.emit(IDLE_PROGRESS)
@@ -439,13 +466,13 @@ class SftpWorker(QThread):
         os.makedirs(lpath, exist_ok=True)
         for attr in self._listdir_ov(rpath):
             self._check_cancel()
-            r = posixpath.join(rpath, attr.filename)
+            remote = posixpath.join(rpath, attr.filename)
             local = _safe_local_child(root, lpath, attr.filename)
             mode = attr.st_mode or 0
             if statmod.S_ISDIR(mode):
-                self._walk_remote(r, local, root, out)
+                self._walk_remote(remote, local, root, out)
             else:
-                out.append((r, local, attr.st_size or 0))
+                out.append((remote, local, attr.st_size or 0))
 
     def _job_download(self, job):
         plan: list[tuple[str, str, int]] = []  # (remote, local, size)
@@ -467,12 +494,11 @@ class SftpWorker(QThread):
             self._check_cancel()
             os.makedirs(os.path.dirname(local) or ".", exist_ok=True)
             label = f"ダウンロード {i + 1}/{len(plan)}: {posixpath.basename(remote)}"
-
-            def cb(got, _sz, _base=done_before, _label=label):
-                self._check_cancel()
-                self._emit_progress(_label, _base + got, total)
-
-            self._get_ov(remote, local, cb)
+            self._get_ov(
+                remote,
+                local,
+                self._progress_callback(label, total, done_before),
+            )
             done_before += size
         self.progress.emit(IDLE_PROGRESS)
         self.status.emit(f"ダウンロード完了 ({len(plan)} ファイル)")
@@ -508,34 +534,12 @@ class SftpWorker(QThread):
         self.job_done.emit("delete")
 
     def _job_open_temp(self, job):
-        remote = job["remote"]
-        name = posixpath.basename(remote)
-        tmpdir = tempfile.mkdtemp(prefix="hashi_open_")
-        local = os.path.join(tmpdir, name)
-        size = job.get("size") or 1
-
-        def cb(got, _sz):
-            self._check_cancel()
-            self._emit_progress(f"開いています: {name}", got, size)
-
-        self._get_ov(remote, local, cb)
-        self.progress.emit(IDLE_PROGRESS)
+        remote, local = self._download_to_temp(job, "hashi_open_")
         self.opened_temp.emit(remote, local)
 
     def _job_open_edit(self, job):
         """内蔵エディタ用に一時 DL。テキストかどうか判定してシグナル。"""
-        remote = job["remote"]
-        name = posixpath.basename(remote)
-        tmpdir = tempfile.mkdtemp(prefix="hashi_edit_")
-        local = os.path.join(tmpdir, name)
-        size = job.get("size") or 1
-
-        def cb(got, _sz):
-            self._check_cancel()
-            self._emit_progress(f"開いています: {name}", got, size)
-
-        self._get_ov(remote, local, cb)
-        self.progress.emit(IDLE_PROGRESS)
+        remote, local = self._download_to_temp(job, "hashi_edit_")
         # バイナリ判定 (先頭に NUL があれば OS アプリで開く)
         try:
             with open(local, "rb") as f:
@@ -604,10 +608,13 @@ class _DropTree(QTreeWidget):
         self.setAcceptDrops(True)
 
     def dragEnterEvent(self, ev):
-        if ev.mimeData().hasUrls():
-            ev.acceptProposedAction()
+        self._accept_url_drag(ev)
 
     def dragMoveEvent(self, ev):
+        self._accept_url_drag(ev)
+
+    @staticmethod
+    def _accept_url_drag(ev):
         if ev.mimeData().hasUrls():
             ev.acceptProposedAction()
 
@@ -1115,7 +1122,11 @@ class SftpBrowser(QWidget):
             self.xfer.enqueue({"kind": "upload", "files": files, "dirs": dirs})
         elif clicked is b_skip:
             conflict_remotes = {c["remote"] for c in conflicts}
-            remain = [(l, r) for l, r in files if r not in conflict_remotes]
+            remain = [
+                (local, remote)
+                for local, remote in files
+                if remote not in conflict_remotes
+            ]
             if not remain and not dirs:
                 self._on_status("送信するファイルがありません")
                 return

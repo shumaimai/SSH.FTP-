@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
@@ -22,6 +21,7 @@ import threading
 import time
 
 from .config import config_dir
+from .jsonio import load_json, save_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -64,23 +64,20 @@ class PermJournal:
         self._counter = 0
 
     def _load(self) -> dict:
-        try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except Exception:
-            # 壊れたジャーナルは復元取りこぼしに直結するので必ず警告する
-            logger.warning("権限ジャーナルを読み込めません（未復元の権限が残る可能性）: %s",
-                           self.path, exc_info=True)
-            return {}
+        return load_json(
+            self.path,
+            dict,
+            logger=logger,
+            warning="権限ジャーナルを読み込めません（未復元の権限が残る可能性）: %s",
+        )
 
     def _save(self, data: dict) -> None:
-        tmp = self.path.with_suffix(".journal.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-            f.flush()
-            os.fsync(f.fileno())
-        tmp.replace(self.path)
+        save_json_atomic(
+            self.path,
+            data,
+            fsync=True,
+            temp_suffix=".journal.tmp",
+        )
 
     def record(self, conn_id: str, path: str, orig_mode: int, pid: int) -> str:
         """権限を緩める前に呼ぶ。エントリ ID を返す(ディスクへ fsync 済み)。"""
