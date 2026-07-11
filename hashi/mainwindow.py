@@ -32,12 +32,14 @@ from .credentials import CredentialStore
 from .dialogs import (
     ConnectDialog,
     HostKeyDialog,
+    KeygenDialog,
     SecretDialog,
     SettingsDialog,
     TunnelDialog,
 )
 from .filebrowser import SftpBrowser
 from .forward import DynamicForward, Forward, LocalForward, RemoteForward
+from .keygen import generate_key, register_public_key
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
 
@@ -136,6 +138,35 @@ class ConnectWorker(QThread):
                 for kind in self._saved_kinds:
                     self.credentials.delete(self.profile, kind)
                     logger.info("認証失敗のため保存済み %s を削除しました", kind)
+            self.fail.emit(str(e))
+
+
+class KeygenWorker(QThread):
+    """鍵生成と公開鍵登録を GUI スレッド外で実行する。"""
+
+    ok = Signal(str, bool)
+    fail = Signal(str)
+
+    def __init__(self, settings: dict, session: SshSession | None = None):
+        super().__init__()
+        self.settings = settings
+        self.session = session
+
+    def run(self):
+        try:
+            _, public_line = generate_key(
+                self.settings["key_type"],
+                self.settings["bits"],
+                self.settings["passphrase"],
+                self.settings["comment"],
+                self.settings["path"],
+            )
+            registered = False
+            if self.settings["register"] and self.session is not None:
+                registered = register_public_key(self.session, public_line)
+            self.ok.emit(self.settings["path"], registered)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("SSH 鍵の生成または登録に失敗しました", exc_info=True)
             self.fail.emit(str(e))
 
 
@@ -371,6 +402,7 @@ class MainWindow(QMainWindow):
         self.settings = Settings()
         self.credentials = CredentialStore()
         self._workers: list[ConnectWorker] = []
+        self._keygen_workers: list[KeygenWorker] = []
 
         # サイドバー
         side = QWidget()
@@ -432,6 +464,7 @@ class MainWindow(QMainWindow):
         m_sess = self.menuBar().addMenu("セッション")
         m_sess.addAction("ポートフォワードを追加…", self._add_tunnel)
         m_sess.addAction("ポートフォワード一覧…", self._list_tunnels)
+        m_sess.addAction("SSH 鍵を生成…", self._generate_key)
         m_sess.addSeparator()
         m_sess.addAction("この接続の保存パスワードを削除", self._forget_credentials)
 
@@ -475,6 +508,31 @@ class MainWindow(QMainWindow):
         self.credentials.clear_profile(prof)
         self.statusBar().showMessage(
             f"{prof.label()} の保存パスワードを削除しました", 5000)
+
+    def _generate_key(self):
+        tab = self._current_tab()
+        dlg = KeygenDialog(self, can_register=tab is not None)
+        if not dlg.exec():
+            return
+        worker = KeygenWorker(dlg.result(), tab.session if tab else None)
+        worker.ok.connect(self._on_keygen_ok)
+        worker.fail.connect(
+            lambda message: QMessageBox.warning(self, "SSH 鍵の生成", message)
+        )
+        worker.finished.connect(lambda w=worker: self._keygen_workers.remove(w))
+        self._keygen_workers.append(worker)
+        self.statusBar().showMessage("SSH 鍵を生成しています…")
+        worker.start()
+
+    def _on_keygen_ok(self, path: str, registered: bool):
+        message = f"秘密鍵を保存しました:\n{path}"
+        if registered:
+            message += "\n公開鍵を接続先の authorized_keys に登録しました。"
+        self.statusBar().showMessage(
+            "SSH 鍵を生成しました" + ("（公開鍵を登録しました）" if registered else ""),
+            5000,
+        )
+        QMessageBox.information(self, "SSH 鍵の生成", message)
 
     def _font_delta(self, d: int):
         tab = self.tabs.currentWidget()

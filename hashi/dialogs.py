@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import AUTH_AGENT, AUTH_KEY, AUTH_PASSWORD, Profile
+from .keygen import ECDSA_BITS, RSA_BITS
 
 
 class DoubleCheckDialog(QDialog):
@@ -464,6 +465,102 @@ class TunnelDialog(QDialog):
             "local_port": self.sp_bind_port.value(),
             "remote_host": self.ed_dest_host.text().strip() or "127.0.0.1",
             "remote_port": self.sp_dest_port.value() if kind != "dynamic" else 0,
+        }
+
+
+class KeygenDialog(QDialog):
+    """SSH 鍵ペアの生成設定。"""
+
+    def __init__(self, parent=None, can_register: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("SSH 鍵を生成")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+
+        form = QFormLayout()
+        self.cb_type = QComboBox()
+        self.cb_type.addItem("Ed25519", "ed25519")
+        self.cb_type.addItem("ECDSA", "ecdsa")
+        self.cb_type.addItem("RSA", "rsa")
+        self.cb_bits = QComboBox()
+        self.ed_passphrase = QLineEdit()
+        self.ed_passphrase.setEchoMode(QLineEdit.Password)
+        self.ed_comment = QLineEdit()
+
+        path_row = QWidget()
+        path_lay = QHBoxLayout(path_row)
+        path_lay.setContentsMargins(0, 0, 0, 0)
+        self.ed_path = QLineEdit()
+        self.ed_path.setPlaceholderText("保存先の秘密鍵ファイル")
+        browse = QPushButton("参照…")
+        browse.clicked.connect(self._browse)
+        path_lay.addWidget(self.ed_path)
+        path_lay.addWidget(browse)
+
+        self.chk_register = QCheckBox("現在の接続先に公開鍵を登録する")
+        self.chk_register.setEnabled(can_register)
+        if not can_register:
+            self.chk_register.setToolTip("接続中のセッションがありません")
+
+        form.addRow("鍵種別", self.cb_type)
+        form.addRow("ビット数", self.cb_bits)
+        form.addRow("パスフレーズ（任意）", self.ed_passphrase)
+        form.addRow("コメント（任意）", self.ed_comment)
+        form.addRow("秘密鍵の保存先", path_row)
+        form.addRow("", self.chk_register)
+
+        note = QLabel(
+            "秘密鍵は指定した場所へ保存し、POSIX 環境では権限を 600 に設定します。"
+        )
+        note.setStyleSheet("color:#888;")
+        note.setWordWrap(True)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton("生成", QDialogButtonBox.AcceptRole)
+        buttons.addButton("キャンセル", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self._validate_accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(note)
+        root.addWidget(buttons)
+
+        self.cb_type.currentIndexChanged.connect(self._update_bits)
+        self._update_bits()
+
+    def _update_bits(self):
+        kind = self.cb_type.currentData()
+        values = [None] if kind == "ed25519" else (
+            list(ECDSA_BITS) if kind == "ecdsa" else list(RSA_BITS)
+        )
+        self.cb_bits.clear()
+        for value in values:
+            if value is None:
+                self.cb_bits.addItem("（固定）", None)
+            else:
+                self.cb_bits.addItem(str(value), value)
+        self.cb_bits.setEnabled(kind != "ed25519")
+
+    def _browse(self):
+        path, _ = QFileDialog.getSaveFileName(self, "秘密鍵の保存先を選択")
+        if path:
+            self.ed_path.setText(path)
+
+    def _validate_accept(self):
+        if self.ed_path.text().strip():
+            self.accept()
+        else:
+            self.ed_path.setFocus()
+
+    def result(self) -> dict:
+        return {
+            "key_type": self.cb_type.currentData(),
+            "bits": self.cb_bits.currentData(),
+            "passphrase": self.ed_passphrase.text() or None,
+            "comment": self.ed_comment.text().strip(),
+            "path": self.ed_path.text().strip(),
+            "register": self.chk_register.isChecked(),
         }
 
 
