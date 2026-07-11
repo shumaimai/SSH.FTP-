@@ -25,6 +25,15 @@
 - SFTPの一覧・操作用 `nav` と転送用 `xfer` は別チャネルという既存設計を維持すること。
 - 共有 `PermManager` の専用チャネルは、既存の `RLock` による直列化を維持すること。
 - `hashi/filebrowser.py` は大きく複雑なため、変更範囲とワーカー間の責務を特に慎重に確認すること。
+- **例外を `except: pass` で握り潰さないこと**。各モジュールは `logging.getLogger(__name__)` を
+  持つ。問題の兆候（設定/ジャーナル/認証情報の読込失敗、権限復元の失敗、sudo 送信失敗など）は
+  `warning`、best-effort の無視（`close` 失敗、未対応シーケンスなど）は `debug` で記録する。
+  「ファイルが無い＝正常」（初回起動）は `FileNotFoundError` を分けて無通知にする。
+- **JSON の永続化は `hashi/jsonio.py` の `load_json` / `save_json_atomic` を使うこと**。
+  自前で `open().write()` せず、アトミック保存（tmp→replace）とフォールバックを共通化に任せる。
+- **依存は paramiko>=5.0 系を前提とする**。5.0 は SHA-1 系（`ssh-rsa` 署名 / `ssh-dss` /
+  `diffie-hellman-group{1,14,exchange}-sha1`）を実装ごと削除しており、OpenSSH 7.2 未満の
+  古いサーバーには接続できない。この制約を勝手に「対応した」と書かないこと。
 
 ## 壊してはいけない重要な設計
 
@@ -34,7 +43,16 @@
 - ジャーナル復元の pid 生存判定を維持し、動作中の別セッションが変更中の権限を誤って戻さないこと。
 - 権限復元は深いパスから順に行い、root所有ファイルなどでは sudo が復元にも必要であることを考慮すること。
 - 右クリックは貼り付け、Shift+右クリックはメニュー、左選択直後はコピーという既存操作を維持すること。
-- パスワード自動入力は sudo プロンプトだけを対象とし、既存の保守的な検知と8秒クールダウンを維持すること。
+- **sudo パスワードは自動送信しない**。リモートはプロンプトを偽装できるため、sudo 検知時は
+  「送信ボタン」を表示し、送る判断は常に人間（ワンタップ）に委ねる既存仕様を維持すること。
+  password/passphrase はボタンも出さない。誤りループ防止の 8 秒クールダウンも維持する。
+- **`forward._pump_stream` では paramiko チャネルを `select` の書き込みリストに入れないこと**。
+  チャネルの `fileno()` は内部パイプの読み取り端で「書き込み可能」と報告されず、-R/-D の
+  返り経路が永久に止まる。送信可否は `chan.send_ready()` で判定して直接 `send` すること。
+- **SFTP 転送は全体をメモリへプリフェッチせず、チャンク単位でストリーミングすること**。
+  `SFTPClient.get/put` の既定は全体プリフェッチで、大容量ではメモリが肥大しキャンセルも
+  効かなくなる。チャンクごとにキャンセル判定・進捗通知する既存設計（`_download_file`/
+  `_upload_file`）を維持する。
 
 ## テストと確認
 
@@ -51,6 +69,25 @@ ruff check .
 - GUIに関係する変更は、可能な限り実際に起動して確認し、確認環境を記録すること。
 - `hashi/privilege.py` または `hashi/permjournal.py` を変更する場合は、必ず対応するテストを追加または更新すること。
 - テスト失敗を隠すためにテストを弱めたり、未検証項目を省略したりしないこと。
+- **ネットワーク・GUI・paramiko チャネル特有の挙動は、フェイクだけを信用せず実機で確認すること**。
+  実際、フェイクが実ソケットを使っていたために CI をすり抜けたバグ（-R/-D の返り経路が
+  返らない）や、テストを書いて初めて発覚したクラッシュ（内蔵エディタの検索）があった。
+  フォワード・転送など実 SSH が絡む変更は、コンテナ内に sshd を立てて通し検証する:
+  ```bash
+  useradd -m tester && echo 'tester:testpass' | chpasswd
+  mkdir -p /run/sshd && /usr/sbin/sshd -p 2222 -o ListenAddress=127.0.0.1 -o PasswordAuthentication=yes
+  # HASHI_LIVE_SSH=1 QT_QPA_PLATFORM=offscreen pytest tests/test_forward.py -k live
+  ```
+- 実機で見つけたバグは、**同じ状況を捉える回帰テストを足してから**修正すること
+  （例: `test_pump_stream_return_path_via_send_ready` はパイプ端 fileno でチャネル特性を固定）。
+
+## 並行作業での衝突回避
+
+- 複数の変更が同じファイル（特に `hashi/filebrowser.py`）に触れると、後から入れる PR が
+  必ずコンフリクトする。**1 本ずつ main に入れ**、入れるたびに他の未マージ PR を最新 main へ
+  リベースし直すこと。まとめて並行マージしようとしないこと。
+- リベース時は、先に入った変更（例: 入力検証の `_safe_local_child`/`destination` 境界、
+  共通ヘルパー `_progress_callback`/`_download_to_temp`、logging 化）を**消さずに載せ直す**こと。
 
 ## コミットとプルリクエスト
 
