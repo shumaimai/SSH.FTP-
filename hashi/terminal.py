@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from collections import defaultdict, deque
 
 import pyte
 from PySide6.QtCore import QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
@@ -106,27 +107,77 @@ class _TerminalScreen(pyte.HistoryScreen):
 
     ブラケットペースト (?2004) 有効時は、貼り付けテキストを
     ESC[200~ ... ESC[201~ で挟んで送信できるようになる。
+
+    代替画面中に PTY がリサイズされた場合、保存中のメイン画面は
+    リサイズされないため、復帰時に内容が一部切り詰められることがある。
     """
 
     _BRACKETED_PASTE_MODE = 2004
+    _ALT_SCREEN_MODES = frozenset({47, 1047, 1049})
 
     def __init__(self, *args, **kwargs):
         self.bracketed_paste = False
+        self.in_alt_screen = False
+        self._main_buffer = None
+        self._main_history = None
+        self._saved_cursor = None
         super().__init__(*args, **kwargs)
 
     def reset(self):
         self.bracketed_paste = False
+        self.in_alt_screen = False
+        self._main_buffer = None
+        self._main_history = None
+        self._saved_cursor = None
         super().reset()
 
     def set_mode(self, *modes, private=False):
+        if private and self._ALT_SCREEN_MODES.intersection(modes):
+            self._enter_alt_screen(save_cursor=1049 in modes)
         if private and self._BRACKETED_PASTE_MODE in modes:
             self.bracketed_paste = True
         super().set_mode(*modes, private=private)
 
     def reset_mode(self, *modes, private=False):
+        if private and self._ALT_SCREEN_MODES.intersection(modes):
+            self._exit_alt_screen(restore_cursor=1049 in modes)
         if private and self._BRACKETED_PASTE_MODE in modes:
             self.bracketed_paste = False
         super().reset_mode(*modes, private=private)
+
+    def _enter_alt_screen(self, save_cursor):
+        if self.in_alt_screen:
+            return
+        self.in_alt_screen = True
+        if save_cursor:
+            self._saved_cursor = (self.cursor.x, self.cursor.y)
+        self._main_buffer = self.buffer
+        self._main_history = self.history
+        self.buffer = defaultdict(self._main_buffer.default_factory)
+        self.history = self.history._replace(
+            top=deque(maxlen=self.history.size),
+            bottom=deque(maxlen=self.history.size),
+            position=self.history.size,
+        )
+        self.dirty.update(range(self.lines))
+        self.cursor_position()
+
+    def _exit_alt_screen(self, restore_cursor):
+        if not self.in_alt_screen:
+            return
+        self.in_alt_screen = False
+        if self._main_buffer is not None:
+            self.buffer = self._main_buffer
+        if self._main_history is not None:
+            self.history = self._main_history
+        self._main_buffer = None
+        self._main_history = None
+        self.dirty.update(range(self.lines))
+        if restore_cursor and self._saved_cursor is not None:
+            self.cursor.x, self.cursor.y = self._saved_cursor
+            self.ensure_hbounds()
+            self.ensure_vbounds()
+        self._saved_cursor = None
 
 
 class TerminalWidget(QWidget):

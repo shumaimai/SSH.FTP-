@@ -151,3 +151,44 @@ def test_bracketed_paste_reset_on_ris(term):
     assert term.screen.bracketed_paste is True
     term._on_data(b"\x1bc")
     assert term.screen.bracketed_paste is False
+
+
+def test_alt_screen_1049_saves_and_restores_main_content(term):
+    """1049 でメイン画面を保存し、解除時に元の内容へ戻す。"""
+    term._on_data(b"main content")
+    assert term.screen.display[0].startswith("main content")
+    term._on_data(b"\x1b[?1049h")
+    assert term.screen.display[0].strip() == ""
+    term._on_data(b"alternate content")
+    assert term.screen.display[0].startswith("alternate content")
+    term._on_data(b"\x1b[?1049l")
+    assert term.screen.display[0].startswith("main content")
+
+
+def test_alt_screen_1049_restores_cursor(term):
+    """1049 解除時に保存したカーソル位置を復元する。"""
+    term._on_data(b"\x1b[5;8H")
+    assert (term.screen.cursor.x, term.screen.cursor.y) == (7, 4)
+    term._on_data(b"\x1b[?1049h\x1b[10;20H")
+    term._on_data(b"\x1b[?1049l")
+    assert (term.screen.cursor.x, term.screen.cursor.y) == (7, 4)
+
+
+@pytest.mark.parametrize("mode", [47, 1047])
+def test_alt_screen_non_cursor_modes_switch_buffers(term, mode):
+    """47/1047 でも画面バッファを切り替え、メイン画面を復元する。"""
+    term._on_data(b"main content")
+    term._on_data(f"\x1b[?{mode}h".encode())
+    assert term.screen.display[0].strip() == ""
+    term._on_data(b"alternate content")
+    assert term.screen.display[0].startswith("alternate content")
+    term._on_data(f"\x1b[?{mode}l".encode())
+    assert term.screen.display[0].startswith("main content")
+
+
+def test_alt_screen_flag_and_ris_reset(term):
+    """代替画面フラグが切り替わり、代替画面中の RIS で解除される。"""
+    term._on_data(b"\x1b[?1049h")
+    assert term.screen.in_alt_screen is True
+    term._on_data(b"\x1bc")
+    assert term.screen.in_alt_screen is False
