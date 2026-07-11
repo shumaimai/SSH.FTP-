@@ -636,7 +636,8 @@ class MainWindow(QMainWindow):
             if profile is not None:
                 idx = self.tabs.indexOf(connecting)
                 if idx >= 0:
-                    self.tabs.setTabText(idx, f"接続失敗: {profile.label()}")
+                    state = "接続失敗" if msg else "接続中止"
+                    self.tabs.setTabText(idx, f"{state}: {profile.label()}")
         self.statusBar().showMessage(
             "接続に失敗しました" if msg else "接続を中止しました", 4000)
 
