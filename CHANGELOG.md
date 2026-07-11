@@ -8,6 +8,13 @@
   sudo プロンプトを偽装して保存済みパスワードを釣れるため、送る判断は常に人間が行う
   (検知したらボタンを表示 → ワンタップで送信)。設定項目は「送信ボタンを表示」に読み替え。
 
+### 変更(依存関係)
+- 最低版を **paramiko >= 5.0.0 / cryptography >= 48.0.1 / setuptools >= 78.1.1** に引き上げ
+  (既知の脆弱性を含む古い版を排除)。paramiko 5.0 は SHA-1 系
+  (`ssh-rsa` 署名 / `ssh-dss` / `diffie-hellman-group{1,14,exchange}-sha1`)を実装ごと
+  削除しているため、**OpenSSH 7.2(2016 年)より古いサーバーや SHA-1 しか話せない
+  機器には接続不可**。必要になったらレガシー互換を別 Issue で検討する。
+
 ### 修正
 - 内蔵エディタの検索(Ctrl+F / F3 / 次へ / 前へ)が `AttributeError` でクラッシュしていた
   (`QPlainTextEdit.FindFlag` → 正しくは `QTextDocument.FindFlag`)。
