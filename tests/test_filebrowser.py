@@ -49,7 +49,7 @@ def test_terminal_path_signal_emits_shell_quoted_input(qapp):
     browser._send_terminal_path(newline=False)
 
     assert emitted == [
-        "'/srv/user'\\''s files/project'\n",
+        "cd '/srv/user'\\''s files/project'\n",
         "'/srv/user'\\''s files/project'",
     ]
     browser.deleteLater()

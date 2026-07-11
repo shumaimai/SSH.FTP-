@@ -1073,7 +1073,7 @@ class SftpBrowser(QWidget):
             return
         text = _quote_posix_shell_path(path)
         if newline:
-            text += "\n"
+            text = "cd " + text + "\n"
         self.terminal_input.emit(text)
 
     # ---- ナビゲーション -------------------------------------------------------
