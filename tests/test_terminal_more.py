@@ -192,3 +192,67 @@ def test_alt_screen_flag_and_ris_reset(term):
     assert term.screen.in_alt_screen is True
     term._on_data(b"\x1bc")
     assert term.screen.in_alt_screen is False
+
+
+# ---- 表示/非表示の切り替えで画面が壊れないこと (Issue #39) --------------------
+
+class _ResizeChannel:
+    """resize_pty の呼び出しを記録するだけのチャネル。"""
+
+    def __init__(self):
+        self.resizes = []
+
+    def send(self, data: bytes):
+        pass
+
+    def resize_pty(self, width: int, height: int):
+        self.resizes.append((width, height))
+
+
+def test_hide_show_preserves_screen_content(qapp):
+    """非表示→再表示で Qt が配達する一瞬の極小 resizeEvent を pyte へ流さない。
+
+    デバウンスなしだと 4 桁幅への破壊的リサイズで行が「main」に切り詰められる。
+    """
+    from PySide6.QtWidgets import QSplitter, QWidget
+
+    from hashi.terminal import TerminalWidget
+
+    split = QSplitter()
+    t = TerminalWidget()
+    split.addWidget(t)
+    split.addWidget(QWidget())
+    split.resize(1000, 600)
+    split.show()
+    qapp.processEvents()
+    t._apply_pending_grid()  # レイアウト確定後の初期サイズを適用
+    ch = _ResizeChannel()
+    t._channel = ch
+    t._on_data(b"main content line")
+    cols_before = t._cols
+
+    t.setVisible(False)
+    qapp.processEvents()
+    t.setVisible(True)
+    qapp.processEvents()
+    t._apply_pending_grid()  # デバウンス満了相当(最終サイズだけが適用される)
+
+    assert t.screen.display[0].startswith("main content line")
+    assert t._cols == cols_before
+    # 途中の極小サイズ (4 桁など) が PTY に送られていないこと
+    assert all(w == cols_before for w, _h in ch.resizes)
+    split.deleteLater()
+
+
+def test_pending_grid_not_applied_while_hidden(qapp):
+    """非表示中はデバウンスタイマーが満了しても適用しない(表示時に再計算)。"""
+    from hashi.terminal import TerminalWidget
+
+    t = TerminalWidget()
+    t._on_data(b"keep me")
+    cols_before = t._cols
+    t._pending_grid = (4, 2)  # 非表示中に届いた極小サイズ相当
+    t._apply_pending_grid()   # タイマー満了相当
+    assert t._cols == cols_before
+    assert t.screen.display[0].startswith("keep me")
+    t.deleteLater()
