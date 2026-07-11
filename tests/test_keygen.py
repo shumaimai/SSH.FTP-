@@ -5,30 +5,30 @@ from hashi.keygen import generate_key, public_key_line, register_public_key
 
 def test_generate_ed25519_with_passphrase(tmp_path):
     path = tmp_path / "id_ed25519"
-    key, public_line = generate_key(
+    generated = generate_key(
         "ed25519", passphrase="秘密", comment="テスト", path=path
     )
 
-    assert isinstance(key, paramiko.Ed25519Key)
-    assert public_line.startswith("ssh-ed25519 ")
-    assert public_line.endswith(" テスト")
+    assert isinstance(generated.pkey, paramiko.Ed25519Key)
+    assert generated.public_line.startswith("ssh-ed25519 ")
+    assert generated.public_line.endswith(" テスト")
     assert path.stat().st_mode & 0o777 == 0o600
     loaded = paramiko.Ed25519Key.from_private_key_file(str(path), password="秘密")
-    assert loaded.get_base64() == key.get_base64()
+    assert loaded.get_base64() == generated.pkey.get_base64()
 
 
 def test_generate_ecdsa_and_rsa(tmp_path):
-    ecdsa, ecdsa_line = generate_key("ecdsa", bits=256, path=tmp_path / "ecdsa")
-    rsa, rsa_line = generate_key("rsa", bits=2048, path=tmp_path / "rsa")
+    ecdsa = generate_key("ecdsa", bits=256, path=tmp_path / "ecdsa")
+    rsa = generate_key("rsa", bits=2048, path=tmp_path / "rsa")
 
-    assert isinstance(ecdsa, paramiko.ECDSAKey)
-    assert ecdsa_line.startswith("ecdsa-sha2-nistp256 ")
-    assert isinstance(rsa, paramiko.RSAKey)
-    assert rsa_line.startswith("ssh-rsa ")
+    assert isinstance(ecdsa.pkey, paramiko.ECDSAKey)
+    assert ecdsa.public_line.startswith("ecdsa-sha2-nistp256 ")
+    assert isinstance(rsa.pkey, paramiko.RSAKey)
+    assert rsa.public_line.startswith("ssh-rsa ")
 
 
 def test_public_key_line_omits_empty_comment():
-    key, _ = generate_key("ed25519")
+    key = generate_key("ed25519").pkey
 
     assert public_key_line(key).count(" ") == 1
     assert public_key_line(key, "  host  ").endswith(" host")
@@ -93,7 +93,7 @@ class _FakeSession:
 
 
 def test_register_public_key_appends_and_avoids_duplicate():
-    key, _ = generate_key("ed25519")
+    key = generate_key("ed25519").pkey
     line = public_key_line(key, "test")
     sftp = _FakeSftp()
     session = _FakeSession(sftp)

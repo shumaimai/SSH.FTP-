@@ -154,7 +154,7 @@ class KeygenWorker(QThread):
 
     def run(self):
         try:
-            _, public_line = generate_key(
+            generated = generate_key(
                 self.settings["key_type"],
                 self.settings["bits"],
                 self.settings["passphrase"],
@@ -163,7 +163,7 @@ class KeygenWorker(QThread):
             )
             registered = False
             if self.settings["register"] and self.session is not None:
-                registered = register_public_key(self.session, public_line)
+                registered = register_public_key(self.session, generated.public_line)
             self.ok.emit(self.settings["path"], registered)
         except Exception as e:  # noqa: BLE001
             logger.warning("SSH 鍵の生成または登録に失敗しました", exc_info=True)

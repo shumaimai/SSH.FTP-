@@ -5,6 +5,7 @@ import errno
 import logging
 import os
 import posixpath
+from dataclasses import dataclass
 from pathlib import Path
 
 import paramiko
@@ -23,15 +24,32 @@ class KeygenError(Exception):
     """鍵の生成または登録に失敗した。"""
 
 
+@dataclass(frozen=True)
+class GeneratedKey:
+    """生成した公開鍵と、必要な秘密鍵書き出し情報。"""
+
+    pkey: paramiko.PKey
+    public_line: str
+    private_key: ed25519.Ed25519PrivateKey | None = None
+
+    def write_private_key(
+        self,
+        path: str | os.PathLike[str],
+        passphrase: str | None = None,
+    ) -> None:
+        write_private_key(self.pkey, path, passphrase, self.private_key)
+
+
 def generate_key(
     key_type: str,
     bits: int | None = None,
     passphrase: str | None = None,
     comment: str = "",
     path: str | os.PathLike[str] | None = None,
-) -> tuple[paramiko.PKey, str]:
+) -> GeneratedKey:
     """鍵ペアを生成し、指定された場合は秘密鍵を書き込む。"""
     normalized = key_type.lower()
+    private = None
     if normalized == "ed25519":
         private = ed25519.Ed25519PrivateKey.generate()
         public = private.public_key().public_bytes(
@@ -41,7 +59,6 @@ def generate_key(
         message.add_string(paramiko.Ed25519Key.name)
         message.add_string(public)
         key = paramiko.Ed25519Key(msg=message)
-        key._hashi_private_key = private
     elif normalized == "ecdsa":
         curves = {256: ec.SECP256R1, 384: ec.SECP384R1, 521: ec.SECP521R1}
         try:
@@ -55,10 +72,10 @@ def generate_key(
     else:
         raise KeygenError(f"未対応の鍵種別です: {key_type}")
 
-    public_line = public_key_line(key, comment)
+    generated = GeneratedKey(key, public_key_line(key, comment), private)
     if path is not None:
-        write_private_key(key, path, passphrase)
-    return key, public_line
+        generated.write_private_key(path, passphrase)
+    return generated
 
 
 def public_key_line(key: paramiko.PKey, comment: str = "") -> str:
@@ -72,18 +89,18 @@ def write_private_key(
     key: paramiko.PKey,
     path: str | os.PathLike[str],
     passphrase: str | None = None,
+    private_key: ed25519.Ed25519PrivateKey | None = None,
 ) -> None:
     """秘密鍵を保存し、POSIX では所有者のみ読み書き可能にする。"""
     destination = Path(path).expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    private = getattr(key, "_hashi_private_key", None)
-    if private is not None:
+    if private_key is not None:
         encryption = (
             serialization.BestAvailableEncryption(passphrase.encode("utf-8"))
             if passphrase
             else serialization.NoEncryption()
         )
-        data = private.private_bytes(
+        data = private_key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.OpenSSH,
             encryption,
