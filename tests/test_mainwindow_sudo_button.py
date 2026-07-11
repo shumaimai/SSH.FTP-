@@ -109,3 +109,23 @@ def test_no_saved_password_warns(tab):
     tab._send_sudo_password()
     assert tab.terminal.sent == []
     assert any(w for _t, w in tab.flashes)
+
+
+def test_manual_send_uses_sudo_then_login_password(tab):
+    """🔑 ボタン / メニューの手動送信 (Issue #40)。sudo → ログインの順で使う。"""
+    tab.secret_ctx.get_login_password = lambda: "login-pw"
+    tab._on_password_prompt("manual")
+    assert tab.terminal.sent == ["saved-sudo"]
+
+    tab.secret_ctx = _SecretCtx(pw=None)
+    tab.secret_ctx.get_login_password = lambda: "login-pw"
+    tab._on_password_prompt("manual")
+    assert tab.terminal.sent == ["saved-sudo", "login-pw"]
+
+
+def test_manual_send_without_any_password_warns(tab):
+    tab.secret_ctx = _SecretCtx(pw=None)
+    tab.secret_ctx.get_login_password = lambda: None
+    tab._on_password_prompt("manual")
+    assert tab.terminal.sent == []
+    assert any(w for _t, w in tab.flashes)

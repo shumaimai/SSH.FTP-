@@ -284,10 +284,21 @@ class SessionTab(QWidget):
         self.bt_files.setText("ファイル")
         self.bt_files.setCheckable(True)
         self.bt_files.setChecked(True)
+        # パスワード送信ボタン(Issue #40)。右クリック=貼り付けのため
+        # 「右クリック→送信」は Shift が要ることが伝わらず使えなかった。
+        # いつでも押せる常設ボタンにする(送る判断は常に人間、は維持)。
+        self.bt_sendpw = QToolButton()
+        self.bt_sendpw.setText("🔑 パスワード送信")
+        self.bt_sendpw.setToolTip(
+            "保存済みの sudo / ログインパスワードをターミナルへ送信します\n"
+            "(Shift+右クリックのメニューからも送信できます)")
+        self.bt_sendpw.clicked.connect(
+            lambda: self._on_password_prompt("manual"))
         info = QLabel(f"{session.profile.username}@{session.profile.host}:{session.profile.port}")
         info.setStyleSheet("color:#8a919e;")
         bar.addWidget(self.bt_term)
         bar.addWidget(self.bt_files)
+        bar.addWidget(self.bt_sendpw)
         bar.addStretch(1)
         bar.addWidget(info)
         root.addLayout(bar)
@@ -359,7 +370,7 @@ class SessionTab(QWidget):
             return
         if kind == "sudo":
             if not self.settings.get("sudo_autofill"):
-                self._flash("sudo パスワード要求: 右クリック→送信 で入力できます")
+                self._flash("sudo パスワード要求: 上の 🔑 ボタンで送信できます")
                 return
             now = time.monotonic()
             if now - self._last_autofill_ts < 8.0:
@@ -370,7 +381,7 @@ class SessionTab(QWidget):
             self._show_sudo_button()
         elif kind in ("password", "passphrase"):
             # 別ホストの可能性があるので自動送信しない(手動送信は可能)
-            self._flash("パスワード要求: 右クリック→送信 で保存済みを送れます")
+            self._flash("パスワード要求: 上の 🔑 ボタンで保存済みを送れます")
 
     def _show_sudo_button(self):
         self._sudo_btn.adjustSize()

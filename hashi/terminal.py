@@ -223,6 +223,16 @@ class TerminalWidget(QWidget):
         self._timer.timeout.connect(self._flush)
         self._timer.start()
 
+        # リサイズのデバウンス。表示/非表示の切り替え中に Qt が一瞬だけ
+        # 極小サイズの resizeEvent を配達することがあり(Issue #39)、
+        # そのまま pyte へ流すと画面内容が数文字に切り詰められて戻らない
+        # (pyte の resize は破壊的)。最終サイズだけを適用する。
+        self._pending_grid: tuple[int, int] | None = None
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(80)
+        self._resize_timer.timeout.connect(self._apply_pending_grid)
+
         self._sel_anchor: tuple[int, int] | None = None  # (row, col)
         self._sel_end: tuple[int, int] | None = None
         self._preedit = ""  # IME 変換中文字列
@@ -346,8 +356,19 @@ class TerminalWidget(QWidget):
 
     # ---- グリッド/リサイズ ----------------------------------------------------
     def _recalc_grid(self):
+        """サイズ変更を予約する(実適用はデバウンス後の _apply_pending_grid)。"""
         cols = max(4, int(self.width() / self._cw))
         rows = max(2, int(self.height() / self._chh))
+        self._pending_grid = (cols, rows)
+        self._resize_timer.start()
+
+    def _apply_pending_grid(self):
+        if self._pending_grid is None:
+            return
+        if not self.isVisible():
+            return  # 非表示中は適用しない(showEvent で再計算する)
+        cols, rows = self._pending_grid
+        self._pending_grid = None
         if (cols, rows) != (self._cols, self._rows):
             self._cols, self._rows = cols, rows
             try:
@@ -363,6 +384,11 @@ class TerminalWidget(QWidget):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        self._recalc_grid()
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # 非表示中に届いたサイズ変更は捨てているので、表示時点の実サイズで取り直す
         self._recalc_grid()
 
     def sizeHint(self) -> QSize:
