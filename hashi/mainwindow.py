@@ -92,25 +92,32 @@ class ConnectWorker(QThread):
             if "passphrase" in normalized or "パスフレーズ" in prompt
             else "password"
         )
-        # 1) 保存済みを最初の 1 回だけ試す
-        if self.credentials and kind not in self._tried_kinds:
+        # 1) 保存済みを最初の 1 回だけ試す。ただし踏み台(ProxyJump)への
+        #    プロンプトは別ホストなので、接続先の保存済みパスワードを流用しない
+        #    (プロンプト文字列に「踏み台」が含まれるのが ssh_core との取り決め)
+        is_jump = "踏み台" in prompt
+        if self.credentials and kind not in self._tried_kinds and not is_jump:
             self._tried_kinds.add(kind)
             saved = self.credentials.get(self.profile, kind)
             if saved:
                 self._saved_kinds.add(kind)
                 self._remember(kind, saved)
                 return saved
-        # 2) 入力を求める
-        default_save = self.profile.save_secrets
-        can_save = bool(self.credentials and self.credentials.available)
+        # 2) 入力を求める。踏み台の秘密は接続先プロファイルのキーで保存すると
+        #    汚染される(次回、接続先に踏み台のパスワードを自動送信してしまう)
+        #    ので保存させない。sudo 供給源(used_password)にもしない。
+        default_save = self.profile.save_secrets and not is_jump
+        can_save = bool(self.credentials and self.credentials.available
+                        and not is_jump)
         resp = self._blocking_ask(
             lambda: self.ask_secret.emit(prompt, default_save, can_save))
         secret, save = resp if isinstance(resp, tuple) else (resp, False)
         if secret is None:
             return None
-        if save and self.credentials:
+        if save and self.credentials and not is_jump:
             self.credentials.set(self.profile, kind, secret)
-        self._remember(kind, secret)
+        if not is_jump:
+            self._remember(kind, secret)
         return secret
 
     def _remember(self, kind, secret):

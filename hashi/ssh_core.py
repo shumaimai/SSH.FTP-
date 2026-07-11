@@ -9,6 +9,7 @@ import base64
 import hashlib
 import logging
 import socket
+from dataclasses import replace
 
 import paramiko
 
@@ -16,6 +17,9 @@ from . import sshconfig
 from .config import AUTH_AGENT, AUTH_KEY, KnownHosts, Profile
 
 logger = logging.getLogger(__name__)
+
+# ProxyJump の多段数上限(設定ミスによる無限チェーン/異常な深さを防ぐ)
+MAX_JUMP_HOPS = 8
 
 
 class ConnectCancelled(Exception):
@@ -64,13 +68,96 @@ def load_private_key(path: str, passphrase: str | None) -> paramiko.PKey:
     raise ConnectError(f"秘密鍵を読み込めませんでした: {last_err}")
 
 
+def parse_jump_specs(spec: str) -> list[tuple[str, str, int | None]]:
+    """OpenSSH の ProxyJump 書式をパースして (user, host, port) のリストを返す。
+
+    書式: ``[user@]host[:port]`` をカンマ区切りで多段。IPv6 は ``[::1]:22`` の
+    ブラケット表記に対応(ブラケット無し・コロン複数は裸の IPv6 とみなす)。
+    port は未指定なら None。不正な書式は ConnectError。
+    """
+    result: list[tuple[str, str, int | None]] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        user = ""
+        if "@" in part:
+            user, part = part.rsplit("@", 1)
+        port_s: str | None = None
+        if part.startswith("["):
+            end = part.find("]")
+            if end < 0:
+                raise ConnectError(f"ProxyJump の書式が不正です([ が閉じていません): {part}")
+            host = part[1:end]
+            rest = part[end + 1:]
+            if rest.startswith(":"):
+                port_s = rest[1:]
+            elif rest:
+                raise ConnectError(f"ProxyJump の書式が不正です: {part}")
+        elif part.count(":") == 1:
+            host, port_s = part.split(":")
+        else:
+            host = part  # コロン 0 個 = ホスト名 / 2 個以上 = 裸の IPv6
+        port: int | None = None
+        if port_s is not None:
+            try:
+                port = int(port_s)
+            except ValueError:
+                port = -1
+            if not 1 <= port <= 65535:
+                raise ConnectError(f"ProxyJump のポートが不正です: {part}")
+        if not host:
+            raise ConnectError(f"ProxyJump のホストが空です: {spec}")
+        result.append((user, host, port))
+    return result
+
+
+def resolve_jump_chain(profile: Profile) -> list[Profile]:
+    """profile.proxy_jump から踏み台の Profile リストを作る(接続順)。
+
+    各踏み台も ~/.ssh/config のエイリアスとして解決する(IdentityFile 等を拾う)。
+    踏み台自体にさらに ProxyJump が付いている入れ子は未対応で、黙って直結する
+    事故を避けるため明示的にエラーにする(トップの ProxyJump に平坦化してもらう)。
+    ユーザー名未指定の踏み台は接続先のユーザー名を流用する。
+    """
+    spec = (profile.proxy_jump or "").strip()
+    if not spec or spec.lower() == "none":
+        return []
+    hops: list[Profile] = []
+    for user, host, port in parse_jump_specs(spec):
+        hop = Profile(host=host, port=port or 22, username=user,
+                      auth_method=AUTH_KEY, save_secrets=False)
+        try:
+            hop = sshconfig.resolve_profile(hop)
+        except sshconfig.UnsupportedOption as e:
+            raise ConnectError(str(e)) from e
+        jp = (hop.proxy_jump or "").strip().lower()
+        if jp and jp != "none":
+            raise ConnectError(
+                f"踏み台 {host} 自体に ProxyJump が設定されています。"
+                "入れ子の多段には未対応です。接続先の ProxyJump に"
+                "カンマ区切りで平坦化してください。(黙って直接接続はしません)")
+        if not hop.username:
+            hop = replace(hop, username=profile.username)
+        hops.append(hop)
+    if len(hops) > MAX_JUMP_HOPS:
+        raise ConnectError(
+            f"ProxyJump の段数が多すぎます({len(hops)} 段 > 上限 {MAX_JUMP_HOPS})。")
+    return hops
+
+
 class SshSession:
-    """1 接続 = 1 Transport。シェルと SFTP は同じ Transport 上の別チャネル。"""
+    """1 接続 = 1 Transport。シェルと SFTP は同じ Transport 上の別チャネル。
+
+    ProxyJump 指定時は踏み台ごとに Transport を張り、direct-tcpip チャネルを
+    次のホップのソケット代わりに使って多段接続する(self.transport は常に最終目的地)。
+    """
 
     def __init__(self, profile: Profile, known_hosts: KnownHosts | None = None):
         self.profile = profile
         self.known_hosts = known_hosts or KnownHosts()
         self.transport: paramiko.Transport | None = None
+        self._jump_transports: list[paramiko.Transport] = []
 
     # ---- 接続 -------------------------------------------------------------
     def connect(self, ui) -> None:
@@ -91,39 +178,66 @@ class SshSession:
         if not p.username:
             raise ConnectError("ユーザー名を入力してください。")
 
+        hops = resolve_jump_chain(p)
+        targets = hops + [p]
+
+        first = targets[0]
+        label = "踏み台 " if hops else ""
         try:
-            sock = socket.create_connection((p.host, p.port), timeout=10)
+            sock = socket.create_connection((first.host, first.port), timeout=10)
         except OSError as e:
-            raise ConnectError(f"{p.host}:{p.port} に接続できません ({e})") from e
+            raise ConnectError(
+                f"{label}{first.host}:{first.port} に接続できません ({e})") from e
 
-        t = paramiko.Transport(sock)
-        t.set_keepalive(30)
+        opened: list[paramiko.Transport] = []
         try:
-            t.start_client(timeout=15)
-        except paramiko.SSHException as e:
-            t.close()
-            raise ConnectError(f"SSH ネゴシエーションに失敗しました ({e})") from e
-
-        try:
-            self._verify_host_key(t, ui)
-            self._authenticate(t, ui)
+            for i, target in enumerate(targets):
+                t = paramiko.Transport(sock)
+                t.set_keepalive(30)
+                try:
+                    t.start_client(timeout=15)
+                except paramiko.SSHException as e:
+                    t.close()
+                    raise ConnectError(
+                        f"{target.host} との SSH ネゴシエーションに失敗しました ({e})"
+                    ) from e
+                opened.append(t)
+                self._verify_host_key(t, ui, target.host, target.port)
+                if target is p:
+                    self._authenticate(t, ui)
+                else:
+                    self._auth_jump(t, ui, target)
+                    nxt = targets[i + 1]
+                    try:
+                        sock = t.open_channel(
+                            "direct-tcpip",
+                            (nxt.host, nxt.port), ("127.0.0.1", 0))
+                    except paramiko.SSHException as e:
+                        raise ConnectError(
+                            f"踏み台 {target.host} から {nxt.host}:{nxt.port} へ"
+                            f"転送チャネルを開けません ({e})") from e
         except Exception:
-            t.close()
+            for t in reversed(opened):
+                try:
+                    t.close()
+                except Exception:
+                    logger.debug("transport.close() に失敗 (無視)", exc_info=True)
             raise
 
-        self.transport = t
+        self._jump_transports = opened[:-1]
+        self.transport = opened[-1]
 
-    def _verify_host_key(self, t: paramiko.Transport, ui) -> None:
-        p = self.profile
+    def _verify_host_key(self, t: paramiko.Transport, ui,
+                         host: str, port: int) -> None:
         server_key = t.get_remote_server_key()
         fp = fingerprint_sha256(server_key)
         key_type = server_key.get_name()
-        status, old_fp = self.known_hosts.check(p.host, p.port, key_type, fp)
+        status, old_fp = self.known_hosts.check(host, port, key_type, fp)
         if status == "match":
             return
         info = {
-            "host": p.host,
-            "port": p.port,
+            "host": host,
+            "port": port,
             "key_type": key_type,
             "fingerprint": fp,
             "status": status,          # "new" or "mismatch"
@@ -131,21 +245,48 @@ class SshSession:
         }
         if not ui.confirm_hostkey(info):
             raise ConnectCancelled()
-        self.known_hosts.remember(p.host, p.port, key_type, fp)
+        self.known_hosts.remember(host, port, key_type, fp)
 
     def _authenticate(self, t: paramiko.Transport, ui) -> None:
         p = self.profile
         if p.auth_method == AUTH_KEY:
-            self._auth_key(t, ui)
+            self._auth_key(t, ui, p)
         elif p.auth_method == AUTH_AGENT:
             self._auth_agent(t)
         else:
-            self._auth_password(t, ui)
+            self._auth_password(t, ui, p)
         if not t.is_authenticated():
             raise ConnectError("認証に失敗しました。")
 
-    def _auth_key(self, t: paramiko.Transport, ui) -> None:
-        p = self.profile
+    def _auth_jump(self, t: paramiko.Transport, ui, hop: Profile) -> None:
+        """踏み台の認証。鍵ファイル(config の IdentityFile)→ エージェント →
+        パスワードの順に試す。プロンプトには必ず「踏み台」を含める
+        (GUI 側が保存済みの接続先パスワードを踏み台に自動送信しないための目印)。
+        """
+        if hop.key_path:
+            try:
+                self._auth_key(t, ui, hop, label="踏み台 ")
+            except ConnectError:
+                logger.debug("踏み台 %s の鍵認証に失敗 (他の方式を試す)", hop.host)
+        if not t.is_authenticated():
+            try:
+                agent_keys = paramiko.Agent().get_keys()
+            except Exception:  # noqa: BLE001 - エージェント不在は普通にある
+                agent_keys = ()
+            for k in agent_keys:
+                try:
+                    t.auth_publickey(hop.username, k)
+                    break
+                except paramiko.AuthenticationException:
+                    continue
+        if not t.is_authenticated():
+            self._auth_password(t, ui, hop, label="踏み台 ")
+        if not t.is_authenticated():
+            raise ConnectError(
+                f"踏み台 {hop.username}@{hop.host} の認証に失敗しました。")
+
+    def _auth_key(self, t: paramiko.Transport, ui, p: Profile,
+                  label: str = "") -> None:
         if not p.key_path:
             raise ConnectError("秘密鍵ファイルを指定してください。")
         passphrase: str | None = None
@@ -156,14 +297,14 @@ class SshSession:
                 break
             except paramiko.PasswordRequiredException:
                 passphrase = ui.get_secret(
-                    f"秘密鍵のパスフレーズを入力\n({p.key_path})"
+                    f"{label}秘密鍵のパスフレーズを入力\n({p.key_path})"
                 )
                 if passphrase is None:
                     raise ConnectCancelled()
             except (paramiko.SSHException, ConnectError, ValueError):
                 # パスフレーズ違いで復号失敗した場合など
                 passphrase = ui.get_secret(
-                    f"パスフレーズが違います。再入力してください\n({p.key_path})"
+                    f"{label}パスフレーズが違います。再入力してください\n({p.key_path})"
                 )
                 if passphrase is None:
                     raise ConnectCancelled()
@@ -194,10 +335,11 @@ class SshSession:
                 last = e
         raise ConnectError(f"エージェント内のどの鍵でも認証できませんでした ({last})")
 
-    def _auth_password(self, t: paramiko.Transport, ui) -> None:
-        p = self.profile
+    def _auth_password(self, t: paramiko.Transport, ui, p: Profile,
+                       label: str = "") -> None:
         for _ in range(3):
-            password = ui.get_secret(f"{p.username}@{p.host} のパスワードを入力")
+            password = ui.get_secret(
+                f"{label}{p.username}@{p.host} のパスワードを入力")
             if password is None:
                 raise ConnectCancelled()
             try:
@@ -205,7 +347,7 @@ class SshSession:
                 return
             except paramiko.AuthenticationException:
                 continue
-        raise ConnectError("パスワード認証に失敗しました。")
+        raise ConnectError(f"{label}パスワード認証に失敗しました。")
 
     # ---- チャネル ----------------------------------------------------------
     def open_shell(self, cols: int = 80, rows: int = 24) -> paramiko.Channel:
@@ -294,3 +436,10 @@ class SshSession:
             except Exception:
                 logger.debug("transport.close() に失敗 (無視)", exc_info=True)
             self.transport = None
+        # 踏み台は目的地側から順に閉じる
+        for t in reversed(self._jump_transports):
+            try:
+                t.close()
+            except Exception:
+                logger.debug("踏み台 transport.close() に失敗 (無視)", exc_info=True)
+        self._jump_transports = []

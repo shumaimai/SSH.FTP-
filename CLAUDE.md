@@ -147,13 +147,21 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
   実 sshd に対し -R/-D とも単発 GET / 2MB 整合性 / 並行接続 / stop 後の解放を通し確認。
   検証中に共有ポンプ `_pump_stream` のバグを発見・修正した(下記)。
 - [x] `~/.ssh/config` の読み込み(Host エイリアス。2026-07-10、`hashi/sshconfig.py`)。
-- [ ] ProxyJump / ProxyCommand(多段接続)。現状は検出したら `UnsupportedOption` で明示拒否。
+- [x] **ProxyJump(多段接続)**(2026-07-11 実装 + 実機検証済み)。踏み台ごとに Transport を
+  張り direct-tcpip チャネルを次ホップのソケットにする方式(`ssh_core.resolve_jump_chain` /
+  `parse_jump_specs`)。踏み台の秘密入力プロンプトは「踏み台」を含める取り決めで、
+  GUI 側(`ConnectWorker.get_secret`)が接続先の保存済みパスワードの流用・踏み台秘密の
+  保存を抑止する。入れ子の ProxyJump(踏み台自身の ProxyJump)は平坦化を促してエラー。
+  実 sshd 2〜3 台で 1 段・2 段チェーンを通し検証済み。`tests/test_proxyjump.py` に
+  ユニット + ライブ結合テスト(`HASHI_LIVE_SSH=1`)として恒久化。
+  **ProxyCommand は未対応のまま明示拒否**(外部コマンド実行が絡む。必要なら別 Issue)。
+- [x] 転送キューの一覧 UI とレジューム(2026-07-10、Issue #5 / `hashi/transferqueue.py`)。
 - [ ] 外部アプリで開いたファイルの変更監視 → 自動再アップロード(内蔵エディタは対応済み。
       「関連付けアプリで開く」経路が未対応)。
-- [ ] 転送キューの一覧 UI とレジューム。
 - [ ] ターミナルの xterm 互換強化(代替スクリーン、マウスレポート、ブラケットペースト)。
+      Issue #6。
 - [ ] terminal / editor のテスト拡充(描画・IME は手動確認中心)。
-- [ ] exe への署名、アイコン(`Hashi.spec` の `icon=`)。
+- [ ] exe への署名(アイコンは v0.3.0 で追加済み)。
 
 ## お作法
 

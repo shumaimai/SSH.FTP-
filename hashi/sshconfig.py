@@ -1,11 +1,11 @@
 """~/.ssh/config の読み込み(Host エイリアス解決)。
 
 接続ダイアログのホスト欄に OpenSSH の Host エイリアスを書けるようにする。
-対応キー: HostName / User / Port / IdentityFile。
+対応キー: HostName / User / Port / IdentityFile / ProxyJump。
 
-ProxyJump は未対応。黙って無視すると「踏み台を経由したつもりが直接接続していた」
-という事故になるため、検出したら例外で明示的に拒否する(Issue #3 のスコープ分割。
-多段接続は別途対応)。
+ProxyCommand は未対応(任意の外部コマンド実行が絡むため)。黙って無視すると
+「踏み台を経由したつもりが直接接続していた」という事故になるため、検出したら
+例外で明示的に拒否する。ProxyJump は ssh_core の多段接続で処理する。
 """
 from __future__ import annotations
 
@@ -32,10 +32,11 @@ def resolve_profile(profile: Profile, path: Path | None = None) -> Profile:
 
     - 設定ファイルが無い / 読めない場合は profile をそのまま返す。
     - Profile 側で明示されている値が常に優先:
-        username 入力済み → User は使わない
-        port が 22 以外   → Port は使わない(22 は未指定とみなす)
-        key_path 指定済み → IdentityFile は使わない
-    - ProxyJump が該当エントリにあれば UnsupportedOption を投げる。
+        username 入力済み  → User は使わない
+        port が 22 以外    → Port は使わない(22 は未指定とみなす)
+        key_path 指定済み  → IdentityFile は使わない
+        proxy_jump 指定済み → ProxyJump は使わない("none" で明示打ち消しも可)
+    - ProxyCommand が該当エントリにあれば UnsupportedOption を投げる。
     """
     p = path or config_path()
     try:
@@ -47,17 +48,17 @@ def resolve_profile(profile: Profile, path: Path | None = None) -> Profile:
 
     entry = cfg.lookup(profile.host)
 
-    # ProxyJump/ProxyCommand は未対応だが、値 "none" は OpenSSH で
-    # 「継承したプロキシを打ち消す(=直接接続でよい)」正規の指定なので拒否しない。
+    # 値 "none" は OpenSSH で「継承したプロキシを打ち消す(=直接接続でよい)」
+    # 正規の指定なのでプロキシ扱いしない。
     def _wants_proxy(key: str) -> bool:
         val = entry.get(key)
         return bool(val) and str(val).strip().lower() != "none"
 
-    if _wants_proxy("proxyjump") or _wants_proxy("proxycommand"):
+    if _wants_proxy("proxycommand"):
         raise UnsupportedOption(
-            f"~/.ssh/config の {profile.host} に ProxyJump/ProxyCommand が"
-            "指定されていますが、Hashi は多段接続に未対応です。"
-            "(黙って直接接続はしません)")
+            f"~/.ssh/config の {profile.host} に ProxyCommand が"
+            "指定されていますが、Hashi は ProxyCommand に未対応です。"
+            "踏み台経由なら ProxyJump を使ってください。(黙って直接接続はしません)")
 
     host = entry.get("hostname", profile.host)
     port = profile.port
@@ -71,9 +72,13 @@ def resolve_profile(profile: Profile, path: Path | None = None) -> Profile:
     if (profile.auth_method == AUTH_KEY and not key_path
             and entry.get("identityfile")):
         key_path = os.path.expanduser(entry["identityfile"][0])
+    proxy_jump = profile.proxy_jump
+    if not proxy_jump and _wants_proxy("proxyjump"):
+        proxy_jump = str(entry["proxyjump"]).strip()
 
-    if (host, port, username, key_path) == (
-            profile.host, profile.port, profile.username, profile.key_path):
+    if (host, port, username, key_path, proxy_jump) == (
+            profile.host, profile.port, profile.username,
+            profile.key_path, profile.proxy_jump):
         return profile
-    return replace(profile, host=host, port=port,
-                   username=username, key_path=key_path)
+    return replace(profile, host=host, port=port, username=username,
+                   key_path=key_path, proxy_jump=proxy_jump)

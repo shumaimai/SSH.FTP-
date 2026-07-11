@@ -75,19 +75,30 @@ def test_missing_config_returns_profile_as_is(tmp_path):
     assert resolve_profile(prof, tmp_path / "nonexistent") is prof
 
 
-def test_proxyjump_is_rejected_not_ignored(cfg):
-    """ProxyJump を黙って無視して直接接続してはいけない。"""
-    with pytest.raises(UnsupportedOption):
-        resolve_profile(Profile(host="jump-needed", username="u"), cfg)
+def test_proxycommand_is_rejected_not_ignored(cfg):
+    """ProxyCommand は未対応。黙って無視して直接接続してはいけない。"""
     with pytest.raises(UnsupportedOption):
         resolve_profile(Profile(host="proxied", username="u"), cfg)
 
 
+def test_proxyjump_is_resolved_into_profile(cfg):
+    """ProxyJump は多段接続に使うため profile.proxy_jump へ取り込む。"""
+    r = resolve_profile(Profile(host="jump-needed", username="u"), cfg)
+    assert r.host == "10.0.0.5"
+    assert r.proxy_jump == "bastion.example.com"
+
+
+def test_explicit_proxy_jump_wins_over_config(cfg):
+    prof = Profile(host="jump-needed", username="u", proxy_jump="other-bastion")
+    assert resolve_profile(prof, cfg).proxy_jump == "other-bastion"
+
+
 def test_proxyjump_none_is_allowed(cfg):
-    """ProxyJump none は「プロキシを打ち消す」正規指定なので拒否しない。"""
+    """ProxyJump none は「プロキシを打ち消す」正規指定。直接接続扱い。"""
     r = resolve_profile(Profile(host="no-proxy"), cfg)
     assert r.host == "10.0.0.7"
     assert r.username == "direct"
+    assert r.proxy_jump == ""
 
 
 def test_ssh_core_uses_resolution(tmp_path, monkeypatch):

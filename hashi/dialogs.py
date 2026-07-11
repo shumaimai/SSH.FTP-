@@ -249,6 +249,10 @@ class ConnectDialog(QDialog):
         self.ed_initial = QLineEdit(p.initial_path)
         self.ed_initial.setPlaceholderText("空欄ならホームディレクトリ")
 
+        self.ed_proxy = QLineEdit(p.proxy_jump)
+        self.ed_proxy.setPlaceholderText(
+            "例: user@bastion:22 (カンマ区切りで多段。空欄なら直接接続)")
+
         self.chk_save = QCheckBox("入力したパスワード/パスフレーズを保存する")
         self.chk_save.setChecked(p.save_secrets)
         self.chk_sudo = QCheckBox("sudo のパスワードはログインと同じ")
@@ -263,6 +267,7 @@ class ConnectDialog(QDialog):
         form.addRow("パスワード", self.ed_password)
         form.addRow("鍵のパスフレーズ", self.ed_passphrase)
         form.addRow("初期パス", self.ed_initial)
+        form.addRow("踏み台 (ProxyJump)", self.ed_proxy)
         form.addRow("", self.chk_save)
         form.addRow("", self.chk_sudo)
         self._key_label = form.labelForField(self._key_row)
@@ -333,6 +338,7 @@ class ConnectDialog(QDialog):
             auth_method=self.cb_auth.currentData(),
             key_path=self.ed_key.text().strip(),
             initial_path=self.ed_initial.text().strip(),
+            proxy_jump=self.ed_proxy.text().strip(),
             save_secrets=self.chk_save.isChecked(),
             sudo_same_as_password=self.chk_sudo.isChecked(),
         )
