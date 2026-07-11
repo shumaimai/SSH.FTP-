@@ -26,8 +26,13 @@ def test_terminal_target_uses_parent_for_files():
     assert Browser([{"name": "folder", "is_dir": True}])._terminal_target_path() == (
         "/srv/work/folder"
     )
-    assert Browser([{"name": "notes.txt", "is_dir": False}])._terminal_target_path() == (
+    assert Browser([{"name": "notes.txt", "is_dir": False}])._terminal_target_path(
+        for_cd=True
+    ) == (
         "/srv/work"
+    )
+    assert Browser([{"name": "notes.txt", "is_dir": False}])._terminal_target_path() == (
+        "/srv/work/notes.txt"
     )
 
 
@@ -47,10 +52,17 @@ def test_terminal_path_signal_emits_shell_quoted_input(qapp):
 
     browser._send_terminal_path(newline=True)
     browser._send_terminal_path(newline=False)
+    browser._selected_entries = lambda: [
+        {"name": "notes.txt", "is_dir": False},
+    ]
+    browser._send_terminal_path(newline=True)
+    browser._send_terminal_path(newline=False)
 
     assert emitted == [
         "cd '/srv/user'\\''s files/project'\n",
         "'/srv/user'\\''s files/project'",
+        "cd '/srv/user'\\''s files'\n",
+        "'/srv/user'\\''s files/notes.txt'",
     ]
     browser.deleteLater()
 

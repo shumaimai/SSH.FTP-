@@ -1058,17 +1058,17 @@ class SftpBrowser(QWidget):
             for entry in self._selected_entries()
         ]
 
-    def _terminal_target_path(self) -> str:
+    def _terminal_target_path(self, for_cd: bool = False) -> str:
         selected = self._selected_entries()
         if not selected:
             return self.cwd
         path = posixpath.join(self.cwd, selected[0]["name"])
-        if not selected[0]["is_dir"]:
+        if for_cd and not selected[0]["is_dir"]:
             path = posixpath.dirname(path) or "/"
         return path
 
     def _send_terminal_path(self, newline: bool):
-        path = self._terminal_target_path()
+        path = self._terminal_target_path(for_cd=newline)
         if not path:
             return
         text = _quote_posix_shell_path(path)
