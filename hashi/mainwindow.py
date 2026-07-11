@@ -37,7 +37,7 @@ from .dialogs import (
     TunnelDialog,
 )
 from .filebrowser import SftpBrowser
-from .forward import LocalForward
+from .forward import DynamicForward, Forward, LocalForward, RemoteForward
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
 
@@ -189,7 +189,7 @@ class SessionTab(QWidget):
         self.session = session
         self.settings = settings
         self.secret_ctx = secret_ctx
-        self.tunnels: list[LocalForward] = []
+        self.tunnels: list[Forward] = []
         self._last_autofill_ts = 0.0
 
         root = QVBoxLayout(self)
@@ -326,9 +326,20 @@ class SessionTab(QWidget):
 
     # ---- ポートフォワード ----------------------------------------------------
     def add_tunnel(self, spec: dict) -> str:
-        fw = LocalForward(
-            self.session.transport, spec["local_host"], spec["local_port"],
-            spec["remote_host"], spec["remote_port"])
+        kind = spec.get("type", "local")
+        if kind == "local":
+            fw = LocalForward(
+                self.session.transport, spec["local_host"], spec["local_port"],
+                spec["remote_host"], spec["remote_port"])
+        elif kind == "remote":
+            fw = RemoteForward(
+                self.session.transport, spec["remote_host"], spec["remote_port"],
+                spec["local_host"], spec["local_port"])
+        elif kind == "dynamic":
+            fw = DynamicForward(
+                self.session.transport, spec["local_host"], spec["local_port"])
+        else:
+            raise ValueError(f"未知のフォワード種別: {kind}")
         fw.start()
         self.tunnels.append(fw)
         return fw.label()
