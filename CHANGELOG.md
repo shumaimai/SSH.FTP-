@@ -3,6 +3,9 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+- (次の作業をここに)
+
+## [0.3.0] - 2026-07-11
 ### 変更
 - **sudo パスワードの自動送信を廃止し、ワンタップ送信ボタンに変更**。リモート側は
   sudo プロンプトを偽装して保存済みパスワードを釣れるため、送る判断は常に人間が行う
@@ -37,6 +40,17 @@
   並行接続 / stop 後の解放)。
 - terminal / editor のテスト拡充(選択コピー・全角幅・プロンプト重複抑止・改行変換・
   タイトル通知 / 言語判定・ハイライト・検索回り込み・保存フロー)(#7)。
+- 転送キューの一覧 UI とレジューム(途中再開)。256KB チャンクのストリーミング転送で
+  大容量でもメモリが肥大せず、チャンク単位でキャンセルできる。実 sshd で 20MB 転送・
+  途中キャンセル・DL/UL レジュームを実機検証(#5)。
+- 外部アプリで開いたファイルの変更監視 → 自動再アップロード(#4)。
+- 接続設定ダイアログに認証方式ごとのパスワード / パスフレーズ入力欄。
+- ターミナルのブラケットペースト(`?2004`)対応(#6 の一部)。
+- アプリアイコン(橋モチーフの盾。`assets/hashi.ico`、`Hashi.spec` で指定)(#8)。
+
+### 追加(開発基盤)
+- エラーハンドリングの見直し(握り潰していた例外を logging 化、`HASHI_LOG_LEVEL` で調整)。
+- 永続化・転送処理の共通化(`jsonio`、進捗コールバック / 一時 DL ヘルパー)。
 
 ## [0.2.0] - 2026-07-10
 ### 追加
@@ -60,6 +74,7 @@
 - 削除・上書きの 2 段階確認。
 - CLI 接続診断ツール `tools/doctor.py`。
 
-[Unreleased]: https://github.com/shumaimai/SSH.FTP-/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shumaimai/SSH.FTP-/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shumaimai/SSH.FTP-/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shumaimai/SSH.FTP-/releases/tag/v0.2.0
 [0.1.0]: https://github.com/shumaimai/SSH.FTP-/releases/tag/v0.1.0

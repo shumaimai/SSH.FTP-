@@ -53,5 +53,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,            # アイコンを用意したら "assets/hashi.ico" などを指定
+    icon="assets/hashi.ico",   # 橋モチーフの盾アイコン(assets/hashi.png が元画像)
 )
