@@ -120,7 +120,12 @@ def register_public_key(session, public_line: str) -> bool:
     """
     if not public_line.strip():
         raise KeygenError("公開鍵が空です。")
-    rc, home, err = session.exec_command('printf "%s" "$HOME"')
+    try:
+        rc, home, err = session.exec_command('printf "%s" "$HOME"')
+    except (AssertionError, EOFError, paramiko.SSHException) as exc:
+        raise KeygenError(
+            "接続が失われました。再接続してから実行してください。"
+        ) from exc
     home = home.strip()
     if rc != 0 or not home or not home.startswith("/"):
         detail = err.strip() or "ホームディレクトリを取得できませんでした。"
@@ -128,7 +133,12 @@ def register_public_key(session, public_line: str) -> bool:
 
     ssh_dir = posixpath.join(home, ".ssh")
     authorized_keys = posixpath.join(ssh_dir, "authorized_keys")
-    sftp = session.open_sftp()
+    try:
+        sftp = session.open_sftp()
+    except (AssertionError, EOFError, OSError, paramiko.SSHException) as exc:
+        raise KeygenError(
+            "接続が失われました。再接続してから実行してください。"
+        ) from exc
     try:
         try:
             sftp.stat(ssh_dir)
@@ -149,10 +159,15 @@ def register_public_key(session, public_line: str) -> bool:
             existing = ""
 
         identity = " ".join(public_line.split()[:2])
+        identity_parts = identity.split()
         already_exists = any(
-            " ".join(line.split()[:2]) == identity
+            any(
+                fields[index:index + len(identity_parts)] == identity_parts
+                for index in range(len(fields) - len(identity_parts) + 1)
+            )
             for line in existing.splitlines()
-            if len(line.split()) >= 2 and not line.lstrip().startswith("#")
+            if not line.lstrip().startswith("#")
+            for fields in [line.split()]
         )
         if not already_exists:
             separator = "" if not existing or existing.endswith("\n") else "\n"
@@ -161,6 +176,10 @@ def register_public_key(session, public_line: str) -> bool:
                 remote_file.write(content.encode("utf-8"))
         sftp.chmod(authorized_keys, 0o600)
         return not already_exists
+    except (AssertionError, EOFError, OSError, paramiko.SSHException) as exc:
+        raise KeygenError(
+            "接続が失われました。再接続してから実行してください。"
+        ) from exc
     finally:
         try:
             sftp.close()

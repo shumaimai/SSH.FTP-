@@ -153,21 +153,31 @@ class KeygenWorker(QThread):
         self.session = session
 
     def run(self):
+        saved = False
         try:
             generated = generate_key(
                 self.settings["key_type"],
                 self.settings["bits"],
                 self.settings["passphrase"],
                 self.settings["comment"],
-                self.settings["path"],
             )
+            generated.write_private_key(
+                self.settings["path"], self.settings["passphrase"]
+            )
+            saved = True
             registered = False
             if self.settings["register"] and self.session is not None:
                 registered = register_public_key(self.session, generated.public_line)
             self.ok.emit(self.settings["path"], registered)
         except Exception as e:  # noqa: BLE001
             logger.warning("SSH 鍵の生成または登録に失敗しました", exc_info=True)
-            self.fail.emit(str(e))
+            if saved:
+                self.fail.emit(
+                    "秘密鍵の保存は完了しました。公開鍵の登録のみ失敗しました。\n"
+                    f"{e}"
+                )
+            else:
+                self.fail.emit(str(e))
 
 
 class SecretContext:
@@ -514,7 +524,7 @@ class MainWindow(QMainWindow):
         dlg = KeygenDialog(self, can_register=tab is not None)
         if not dlg.exec():
             return
-        worker = KeygenWorker(dlg.result(), tab.session if tab else None)
+        worker = KeygenWorker(dlg.result_settings(), tab.session if tab else None)
         worker.ok.connect(self._on_keygen_ok)
         worker.fail.connect(
             lambda message: QMessageBox.warning(self, "SSH 鍵の生成", message)

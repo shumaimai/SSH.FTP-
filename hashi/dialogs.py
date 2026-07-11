@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -548,12 +551,23 @@ class KeygenDialog(QDialog):
             self.ed_path.setText(path)
 
     def _validate_accept(self):
-        if self.ed_path.text().strip():
-            self.accept()
-        else:
+        path = self.ed_path.text().strip()
+        if not path:
             self.ed_path.setFocus()
+            return
+        if Path(path).expanduser().exists():
+            answer = QMessageBox.question(
+                self,
+                "秘密鍵の上書き",
+                f"既存の秘密鍵ファイルを上書きしますか?\n{path}",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self.accept()
 
-    def result(self) -> dict:
+    def result_settings(self) -> dict:
         return {
             "key_type": self.cb_type.currentData(),
             "bits": self.cb_bits.currentData(),

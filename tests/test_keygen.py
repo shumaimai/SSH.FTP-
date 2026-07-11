@@ -1,6 +1,11 @@
 import paramiko
 
-from hashi.keygen import generate_key, public_key_line, register_public_key
+from hashi.keygen import (
+    KeygenError,
+    generate_key,
+    public_key_line,
+    register_public_key,
+)
 
 
 def test_generate_ed25519_with_passphrase(tmp_path):
@@ -105,3 +110,18 @@ def test_register_public_key_appends_and_avoids_duplicate():
     assert sftp.modes[path] == 0o600
     assert register_public_key(session, line + " changed-comment") is False
     assert sftp.files[path].decode().splitlines() == [line]
+    sftp.files[path] = f'from="host" {line}\n'.encode()
+    assert register_public_key(session, line + " another-comment") is False
+
+
+def test_register_public_key_reports_lost_connection():
+    class DroppedSession:
+        def exec_command(self, _command):
+            raise AssertionError
+
+    try:
+        register_public_key(DroppedSession(), "ssh-ed25519 AAAA")
+    except KeygenError as exc:
+        assert str(exc) == "接続が失われました。再接続してから実行してください。"
+    else:
+        raise AssertionError("KeygenError が送出されませんでした")
