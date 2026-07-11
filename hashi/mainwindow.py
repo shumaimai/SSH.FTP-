@@ -631,13 +631,17 @@ class MainWindow(QMainWindow):
     def _on_connect_failed(self, msg: str,
                            connecting: ConnectingWidget | None = None,
                            profile: Profile | None = None):
+        connecting_idx = -1
         if connecting is not None:
-            connecting.show_error(msg)
-            if profile is not None:
-                idx = self.tabs.indexOf(connecting)
-                if idx >= 0:
+            connecting_idx = self.tabs.indexOf(connecting)
+            if connecting_idx >= 0:
+                connecting.show_error(msg)
+                if profile is not None:
                     state = "接続失敗" if msg else "接続中止"
-                    self.tabs.setTabText(idx, f"{state}: {profile.label()}")
+                    self.tabs.setTabText(
+                        connecting_idx, f"{state}: {profile.label()}")
+        if msg and connecting_idx < 0:
+            QMessageBox.warning(self, "接続エラー", msg)
         self.statusBar().showMessage(
             "接続に失敗しました" if msg else "接続を中止しました", 4000)
 
