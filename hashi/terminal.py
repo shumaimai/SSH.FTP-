@@ -101,6 +101,34 @@ _KEYMAP = {
 }
 
 
+class _TerminalScreen(pyte.HistoryScreen):
+    """pyte.HistoryScreen を拡張し、xterm 互換のプライベートモードを追加する。
+
+    ブラケットペースト (?2004) 有効時は、貼り付けテキストを
+    ESC[200~ ... ESC[201~ で挟んで送信できるようになる。
+    """
+
+    _BRACKETED_PASTE_MODE = 2004
+
+    def __init__(self, *args, **kwargs):
+        self.bracketed_paste = False
+        super().__init__(*args, **kwargs)
+
+    def reset(self):
+        self.bracketed_paste = False
+        super().reset()
+
+    def set_mode(self, *modes, private=False):
+        if private and self._BRACKETED_PASTE_MODE in modes:
+            self.bracketed_paste = True
+        super().set_mode(*modes, private=private)
+
+    def reset_mode(self, *modes, private=False):
+        if private and self._BRACKETED_PASTE_MODE in modes:
+            self.bracketed_paste = False
+        super().reset_mode(*modes, private=private)
+
+
 class TerminalWidget(QWidget):
     """1 セッション分のターミナル画面。attach(channel) で使用開始。"""
 
@@ -132,7 +160,7 @@ class TerminalWidget(QWidget):
         self._closed = False
 
         self._cols, self._rows = 80, 24
-        self.screen = pyte.HistoryScreen(self._cols, self._rows, history=5000, ratio=0.5)
+        self.screen = _TerminalScreen(self._cols, self._rows, history=5000, ratio=0.5)
         self.stream = pyte.ByteStream(self.screen)
 
         self._font_size = font_size
@@ -257,7 +285,12 @@ class TerminalWidget(QWidget):
 
     def paste_clipboard(self):
         text = QGuiApplication.clipboard().text()
-        if text:
+        if not text:
+            return
+        if getattr(self.screen, "bracketed_paste", False):
+            # ブラケットペースト中は改行を変換せず、元のテキストをそのまま囲んで送信
+            self.send_bytes(b"\x1b[200~" + text.encode("utf-8") + b"\x1b[201~")
+        else:
             self.send_text(text)
 
     # ---- グリッド/リサイズ ----------------------------------------------------

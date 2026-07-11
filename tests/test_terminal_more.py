@@ -113,3 +113,41 @@ def test_send_bytes_without_channel_is_noop(term):
     """未接続(channel=None)でも送信系が落ちない。"""
     term.send_text("ls\n")
     term.send_password("x")
+
+
+def test_bracketed_paste_mode_set_and_reset(term):
+    """CSI ?2004 h/l でブラケットペーストモードが切り替わる。"""
+    assert term.screen.bracketed_paste is False
+    term._on_data(b"\x1b[?2004h")
+    assert term.screen.bracketed_paste is True
+    term._on_data(b"\x1b[?2004l")
+    assert term.screen.bracketed_paste is False
+
+
+def test_bracketed_paste_wraps_clipboard(term):
+    """ブラケットペースト有効時、貼り付けを ESC[200~ / ESC[201~ で囲み、
+    LF を CR に変換しない。
+    """
+    ch = FakeChannel()
+    term._channel = ch
+    term._on_data(b"\x1b[?2004h")
+    QGuiApplication.clipboard().setText("def foo():\n    pass")
+    term.paste_clipboard()
+    assert ch.sent == b"\x1b[200~def foo():\n    pass\x1b[201~"
+
+
+def test_paste_clipboard_without_bracketed_paste(term):
+    """ブラケットペースト無効時、貼り付けは send_text 経路で LF→CR される。"""
+    ch = FakeChannel()
+    term._channel = ch
+    QGuiApplication.clipboard().setText("ls\npwd")
+    term.paste_clipboard()
+    assert ch.sent == b"ls\rpwd"
+
+
+def test_bracketed_paste_reset_on_ris(term):
+    """RIS (ESC c) でブラケットペーストモードもリセットされる。"""
+    term._on_data(b"\x1b[?2004h")
+    assert term.screen.bracketed_paste is True
+    term._on_data(b"\x1bc")
+    assert term.screen.bracketed_paste is False
