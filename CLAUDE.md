@@ -95,6 +95,12 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
    (送信直後の再プロンプトにはボタンを出さない)。手動送信は右クリックメニュー
    (→ `password_prompt.emit("manual")`)。
 8. **オフスクリーン Qt**: ヘッドレスでの検証は `QT_QPA_PLATFORM=offscreen`。
+9. **-R/-D の双方向ポンプ `forward._pump_stream`**: paramiko チャネルの `fileno()` は
+   内部パイプの読み取り端。**select の書き込みリストに入れても「書き込み可能」には
+   ならない**ので、返り経路のフラッシュは `chan.send_ready()` で判定して直接 `send` する
+   (select 依存にすると応答が永久に返らない)。実ソケットを使うフェイクでは再現しないため、
+   `tests/test_forward.py::test_pump_stream_return_path_via_send_ready` がパイプ端 fileno で
+   この特性を固定している。
 
 ## テスト方針 / 検証済みと未検証
 
@@ -137,7 +143,9 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
 ## ロードマップ / 未着手(優先度つき)
 
 - [x] **ポートフォワードの実機検証**(2026-07-10 完了。`tests/test_forward.py` 参照)。
-- [ ] リモート(-R)/ ダイナミック(-D)フォワード。
+- [x] **リモート(-R)/ ダイナミック(-D)フォワード**(#2、2026-07-10 実装 + 実機検証済み)。
+  実 sshd に対し -R/-D とも単発 GET / 2MB 整合性 / 並行接続 / stop 後の解放を通し確認。
+  検証中に共有ポンプ `_pump_stream` のバグを発見・修正した(下記)。
 - [x] `~/.ssh/config` の読み込み(Host エイリアス。2026-07-10、`hashi/sshconfig.py`)。
 - [ ] ProxyJump / ProxyCommand(多段接続)。現状は検出したら `UnsupportedOption` で明示拒否。
 - [ ] 外部アプリで開いたファイルの変更監視 → 自動再アップロード(内蔵エディタは対応済み。
