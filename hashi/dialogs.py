@@ -190,12 +190,15 @@ def ask_secret(parent, prompt: str) -> str | None:
 class ConnectDialog(QDialog):
     """接続プロファイルの作成・編集。"""
 
-    def __init__(self, parent=None, profile: Profile | None = None):
+    def __init__(self, parent=None, profile: Profile | None = None,
+                 credentials=None):
         super().__init__(parent)
         self.setWindowTitle("接続設定")
         self.setModal(True)
         self.setMinimumWidth(460)
         p = profile or Profile()
+        self._previous_profile = profile
+        self._credentials = credentials
 
         form = QFormLayout()
         self.ed_name = QLineEdit(p.name)
@@ -225,10 +228,24 @@ class ConnectDialog(QDialog):
         key_lay.addWidget(btn_browse)
         self._key_row = key_row
 
+        self.ed_password = QLineEdit()
+        self.ed_password.setEchoMode(QLineEdit.Password)
+        self.ed_password.setPlaceholderText(
+            "空欄なら保存済みの内容を変更しません"
+            if profile else "空欄なら接続時に入力"
+        )
+
+        self.ed_passphrase = QLineEdit()
+        self.ed_passphrase.setEchoMode(QLineEdit.Password)
+        self.ed_passphrase.setPlaceholderText(
+            "空欄なら保存済みの内容を変更しません"
+            if profile else "空欄なら必要時に入力"
+        )
+
         self.ed_initial = QLineEdit(p.initial_path)
         self.ed_initial.setPlaceholderText("空欄ならホームディレクトリ")
 
-        self.chk_save = QCheckBox("パスワード/パスフレーズを保存する")
+        self.chk_save = QCheckBox("入力したパスワード/パスフレーズを保存する")
         self.chk_save.setChecked(p.save_secrets)
         self.chk_sudo = QCheckBox("sudo のパスワードはログインと同じ")
         self.chk_sudo.setChecked(p.sudo_same_as_password)
@@ -239,9 +256,14 @@ class ConnectDialog(QDialog):
         form.addRow("ユーザー名", self.ed_user)
         form.addRow("認証方式", self.cb_auth)
         form.addRow("秘密鍵", key_row)
+        form.addRow("パスワード", self.ed_password)
+        form.addRow("鍵のパスフレーズ", self.ed_passphrase)
         form.addRow("初期パス", self.ed_initial)
         form.addRow("", self.chk_save)
         form.addRow("", self.chk_sudo)
+        self._key_label = form.labelForField(self._key_row)
+        self._password_label = form.labelForField(self.ed_password)
+        self._passphrase_label = form.labelForField(self.ed_passphrase)
 
         note = QLabel(
             "保存する場合、OS の資格情報ストア(Windows 資格情報マネージャ等)を"
@@ -261,11 +283,25 @@ class ConnectDialog(QDialog):
         root.addWidget(note)
         root.addWidget(buttons)
 
-        self.cb_auth.currentIndexChanged.connect(self._toggle_key_row)
-        self._toggle_key_row()
+        self.cb_auth.currentIndexChanged.connect(self._toggle_auth_rows)
+        self._toggle_auth_rows()
 
-    def _toggle_key_row(self):
-        self._key_row.setEnabled(self.cb_auth.currentData() == AUTH_KEY)
+    @staticmethod
+    def _set_row_visible(label, widget, visible: bool):
+        label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _toggle_auth_rows(self):
+        auth_method = self.cb_auth.currentData()
+        is_key = auth_method == AUTH_KEY
+        has_password = auth_method in (AUTH_KEY, AUTH_PASSWORD)
+        self._set_row_visible(self._key_label, self._key_row, is_key)
+        self._set_row_visible(
+            self._password_label, self.ed_password, has_password)
+        self._set_row_visible(
+            self._passphrase_label, self.ed_passphrase, is_key)
+        self._password_label.setText(
+            "ログインパスワード（任意）" if is_key else "パスワード")
 
     def _browse_key(self):
         path, _ = QFileDialog.getOpenFileName(self, "秘密鍵ファイルを選択")
@@ -296,6 +332,26 @@ class ConnectDialog(QDialog):
             save_secrets=self.chk_save.isChecked(),
             sudo_same_as_password=self.chk_sudo.isChecked(),
         )
+
+    def apply_credentials(self, profile: Profile) -> None:
+        if self._credentials is None:
+            return
+        previous = self._previous_profile
+        if not profile.save_secrets:
+            self._credentials.clear_profile(profile)
+            if previous and previous.id_str() != profile.id_str():
+                self._credentials.clear_profile(previous)
+            return
+
+        auth_method = self.cb_auth.currentData()
+        password = self.ed_password.text() if auth_method != AUTH_AGENT else ""
+        passphrase = self.ed_passphrase.text() if auth_method == AUTH_KEY else ""
+        if password:
+            self._credentials.set(profile, "password", password)
+        if passphrase:
+            self._credentials.set(profile, "passphrase", passphrase)
+        if previous and previous.id_str() != profile.id_str():
+            self._credentials.clear_profile(previous)
 
 
 class TunnelDialog(QDialog):

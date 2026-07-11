@@ -99,3 +99,20 @@ def test_auth_failure_japanese_message_clears_saved(qapp, monkeypatch):
     worker.run()
 
     assert "password" in creds.deleted
+
+
+def test_japanese_passphrase_prompt_uses_saved_passphrase(qapp):
+    import hashi.mainwindow as mw
+
+    profile = Profile(host="h", port=22, username="u")
+    creds = FakeCredentials({
+        (profile.id_str(), "password"): "login-secret",
+        (profile.id_str(), "passphrase"): "key-secret",
+    })
+    worker = mw.ConnectWorker(profile, KnownHosts(), creds)
+
+    secret = worker.get_secret("秘密鍵のパスフレーズを入力")
+
+    assert secret == "key-secret"
+    assert worker.used_passphrase == "key-secret"
+    assert worker.used_password is None

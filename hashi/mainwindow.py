@@ -83,7 +83,12 @@ class ConnectWorker(QThread):
 
     # ssh_core が要求する ui インターフェース
     def get_secret(self, prompt: str):
-        kind = "passphrase" if "passphrase" in prompt.lower() else "password"
+        normalized = prompt.lower()
+        kind = (
+            "passphrase"
+            if "passphrase" in normalized or "パスフレーズ" in prompt
+            else "password"
+        )
         # 1) 保存済みを最初の 1 回だけ試す
         if self.credentials and kind not in self._tried_kinds:
             self._tried_kinds.add(kind)
@@ -483,9 +488,11 @@ class MainWindow(QMainWindow):
             self.list.addItem(item)
 
     def new_profile(self):
-        dlg = ConnectDialog(self)
+        dlg = ConnectDialog(self, credentials=self.credentials)
         if dlg.exec():
-            self.store.add(dlg.result_profile())
+            profile = dlg.result_profile()
+            self.store.add(profile)
+            dlg.apply_credentials(profile)
             self._reload_list()
 
     def _profile_menu(self, pos):
@@ -500,9 +507,12 @@ class MainWindow(QMainWindow):
         if chosen is a_conn:
             self._connect_profile(self.store.profiles[row])
         elif chosen is a_edit:
-            dlg = ConnectDialog(self, self.store.profiles[row])
+            dlg = ConnectDialog(
+                self, self.store.profiles[row], self.credentials)
             if dlg.exec():
-                self.store.update(row, dlg.result_profile())
+                profile = dlg.result_profile()
+                self.store.update(row, profile)
+                dlg.apply_credentials(profile)
                 self._reload_list()
         elif chosen is a_del:
             p = self.store.profiles[row]
