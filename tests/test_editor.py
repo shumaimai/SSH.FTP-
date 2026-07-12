@@ -126,3 +126,41 @@ def test_save_failure_keeps_modified(editor_window):
     with patch("hashi.editor.QMessageBox.warning"):
         done(False, "permission denied")
     assert w.editor.document().isModified()
+
+
+def test_find_with_empty_query_is_noop(editor_window):
+    """検索クエリが空でもクラッシュせず何もしない。"""
+    w = editor_window
+    w.find_edit.setText("")
+    before = w.editor.textCursor().position()
+    w._find(True)
+    assert w.editor.textCursor().position() == before
+
+
+def test_find_miss_leaves_no_selection(editor_window):
+    w = editor_window
+    w.find_edit.setText("does-not-exist-xyz")
+    w._find(True)
+    assert not w.editor.textCursor().hasSelection()
+
+
+def test_update_title_reflects_modified(editor_window):
+    w = editor_window
+    w.editor.document().setModified(False)
+    w._update_title()
+    assert not w.windowTitle().startswith("●")
+    w.editor.document().setModified(True)
+    w._update_title()
+    assert w.windowTitle().startswith("●")
+    assert "sample.py" in w.windowTitle()
+
+
+def test_cursor_status_is_one_based(editor_window):
+    from PySide6.QtGui import QTextCursor
+    w = editor_window
+    cur = w.editor.textCursor()
+    cur.movePosition(QTextCursor.Start)
+    w.editor.setTextCursor(cur)
+    w._update_cursor_status()
+    msg = w.statusBar().currentMessage()
+    assert "行 1" in msg and "列 1" in msg

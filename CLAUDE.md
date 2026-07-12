@@ -171,7 +171,10 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
       ブラケットペースト・マウスレポート(`?1000/?1002/?1003` + SGR `?1006`、Shift で
       ローカル選択に迂回)。実 sshd + 実 vim でクリック/ホイール/復帰を通し検証済み。
       `tests/test_terminal_mouse.py` 参照。
-- [ ] terminal / editor のテスト拡充(描画・IME は手動確認中心)。
+- [x] terminal / editor のテスト拡充(2026-07-12)。キー入力→エスケープ列変換
+      (`tests/test_terminal_keys.py`: 方向/Enter/Tab/Backspace/Ctrl 英字/Ctrl+[/Alt 前置/
+      IME commit・preedit/セル座標クランプ)と editor の検索空クエリ・ミス・タイトル・
+      カーソル位置(`tests/test_editor.py` 追記)。描画そのものは手動確認のまま。
 - [ ] exe への署名(アイコンは v0.3.0 で追加済み)。
 
 ## お作法
