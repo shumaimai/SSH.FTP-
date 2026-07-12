@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import p2p, portability, sshd_admin
+from . import netadmin, p2p, portability, sshd_admin
 from .config import APP_VERSION, KnownHosts, Profile, ProfileStore, Settings
 from .credentials import CredentialStore
 from .dialogs import (
@@ -36,6 +36,7 @@ from .dialogs import (
     DoubleCheckDialog,
     HostKeyDialog,
     KeygenDialog,
+    NetAdminDialog,
     P2PSendDialog,
     SasConfirmDialog,
     SecretDialog,
@@ -277,6 +278,76 @@ class SshdHardenWorker(QThread):
             self.fail.emit(str(e))
         except Exception as e:  # noqa: BLE001
             logger.warning("sshd 設定変更で予期しない例外", exc_info=True)
+            self.fail.emit(f"予期しないエラー: {e}")
+
+
+class NetAdminWorker(QThread):
+    """静的 IP 設定(Issue #45)を GUI スレッド外で実行する。
+
+    適用後の疎通確認は「新しい IP へ別接続を張る」ブロッキング処理なので、
+    このワーカースレッド内で行う(GUI を固めない)。
+    """
+
+    ok = Signal(dict)
+    fail = Signal(str)
+
+    def __init__(self, session, profile, known_hosts, credentials,
+                 sudo_pw, settings):
+        super().__init__()
+        self.session = session
+        self.profile = profile
+        self.known_hosts = known_hosts
+        self.credentials = credentials
+        self.sudo_pw = sudo_pw
+        self.settings = settings
+
+    def _verify_ui(self):
+        creds = self.credentials
+        profile = self.profile
+
+        class _Ui:
+            def get_secret(self, prompt):
+                kind = ("passphrase"
+                        if "パスフレーズ" in prompt or "passphrase" in prompt.lower()
+                        else "password")
+                return creds.get(profile, kind) if creds else None
+
+            def confirm_hostkey(self, info):
+                # 新 IP は初見ホストになりうる。IP 固定の疎通確認目的なので信頼して続行。
+                return True
+
+        return _Ui()
+
+    def _verify_reachable(self, new_ip) -> bool:
+        from dataclasses import replace
+        p = replace(self.profile, host=new_ip)
+        sess = SshSession(p, self.known_hosts)
+        try:
+            sess.connect(self._verify_ui())
+            ok = sess.is_alive()
+            sess.close()
+            return ok
+        except Exception:
+            logger.info("新 IP %s への疎通確認に失敗", new_ip, exc_info=True)
+            return False
+
+    def run(self):
+        try:
+            self.session._hashi_sudo_pw = self.sudo_pw
+            res = netadmin.apply_static_ip(
+                self.session,
+                iface=self.settings["iface"],
+                address_cidr=self.settings["address_cidr"],
+                gateway=self.settings["gateway"],
+                nameservers=self.settings["nameservers"],
+                rollback_sec=self.settings["rollback_sec"],
+                verify_reachable=self._verify_reachable,
+            )
+            self.ok.emit(res)
+        except netadmin.NetAdminError as e:
+            self.fail.emit(str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("静的 IP 設定で予期しない例外", exc_info=True)
             self.fail.emit(f"予期しないエラー: {e}")
 
 
@@ -1125,6 +1196,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self._workers: list[ConnectWorker] = []
         self._keygen_workers: list[KeygenWorker] = []
         self._sshd_workers: list[SshdHardenWorker] = []
+        self._netadmin_workers: list[NetAdminWorker] = []
         self._p2p_workers: list[_P2PWorkerBase] = []
         self._cloud_workers: list[CloudSyncWorker] = []
         SessionWindow._windows.append(self)
@@ -1163,6 +1235,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.m_sess.addAction("ポートフォワード一覧…", self._list_tunnels)
         self.m_sess.addAction("SSH 鍵を生成…", self._generate_key)
         self.m_sess.addAction("SSH サーバー設定を変更…", self._harden_sshd)
+        self.m_sess.addAction("サーバーの IP を固定…", self._static_ip)
         self.m_sess.addSeparator()
         self.m_sess.addAction("この接続の保存パスワードを削除",
                               self._forget_credentials)
@@ -1317,6 +1390,59 @@ class SessionWindow(_SharedOps, QMainWindow):
             f"適用ファイル: {res.get('dropin')}\n\n"
             "ポートを変更した場合、この接続のプロファイルのポートも"
             "更新すると次回から新ポートで接続できます。")
+
+    # ---- 静的 IP 設定 (Issue #45) -------------------------------------------
+    def _static_ip(self):
+        tab = self.session_tab
+        if not tab:
+            return
+        session = tab.session
+        session._hashi_sudo_pw = tab.secret_ctx.get_sudo_password()
+        if not netadmin.detect_netplan(session):
+            QMessageBox.warning(
+                self, "IP 固定",
+                "この環境は netplan(Ubuntu Server)で管理されていません。"
+                "安全に自動編集できないため中止しました。")
+            return
+        try:
+            interfaces = netadmin.list_interfaces(session)
+        except netadmin.NetAdminError as e:
+            QMessageBox.warning(self, "IP 固定", str(e))
+            return
+        dlg = NetAdminDialog(self, interfaces=interfaces)
+        if not dlg.exec():
+            return
+        cfg = dlg.result_settings()
+        if not DoubleCheckDialog.confirm(
+                self, "サーバーの IP 固定",
+                f"インターフェース <b>{cfg['iface']}</b> を "
+                f"<b>{cfg['address_cidr']}</b> に固定します。<br>"
+                "誤ると SSH に接続できなくなる可能性があります"
+                f"(適用前にバックアップし、{cfg['rollback_sec']} 秒以内に新しい IP へ"
+                "疎通できなければ自動で元へ戻します)。",
+                "change", "適用"):
+            return
+        sudo_pw = tab.secret_ctx.get_sudo_password()
+        worker = NetAdminWorker(session, session.profile, self.known_hosts,
+                                self.credentials, sudo_pw, cfg)
+        worker.ok.connect(self._on_static_ip_ok)
+        worker.fail.connect(
+            lambda msg: QMessageBox.warning(self, "IP 固定", msg))
+        worker.finished.connect(
+            lambda w=worker: self._netadmin_workers.remove(w))
+        self._netadmin_workers.append(worker)
+        self.statusBar().showMessage("サーバーの IP を固定しています…")
+        worker.start()
+
+    def _on_static_ip_ok(self, res: dict):
+        self.statusBar().showMessage("サーバーの IP を固定しました", 5000)
+        QMessageBox.information(
+            self, "IP 固定",
+            "IP を固定しました。\n"
+            f"バックアップ: {res.get('backup')}\n"
+            f"適用ファイル: {res.get('dropin')}\n\n"
+            "この接続のプロファイルのホストも新しい IP に更新すると、"
+            "次回から新しい IP で接続できます。")
 
     def closeEvent(self, ev):
         tab = self.session_tab

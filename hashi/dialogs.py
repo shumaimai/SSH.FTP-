@@ -584,6 +584,82 @@ class KeygenDialog(QDialog):
         }
 
 
+class NetAdminDialog(QDialog):
+    """サーバーの静的 IP 設定(Issue #45、netplan 限定)。"""
+
+    def __init__(self, parent=None, interfaces=None,
+                 default_rollback: int = 120):
+        super().__init__(parent)
+        self.setWindowTitle("サーバーの IP を固定 (netplan)")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        form = QFormLayout()
+        self.cb_iface = QComboBox()
+        for it in (interfaces or []):
+            label = f"{it['name']}  (現在: {it.get('address', '?')})"
+            self.cb_iface.addItem(label, it["name"])
+        self.cb_iface.setEditable(True)   # 一覧に無い名前も入れられる
+
+        self.ed_address = QLineEdit()
+        self.ed_address.setPlaceholderText("例: 192.168.1.50/24 (CIDR 表記)")
+        self.ed_gateway = QLineEdit()
+        self.ed_gateway.setPlaceholderText("例: 192.168.1.1 (任意)")
+        self.ed_dns = QLineEdit()
+        self.ed_dns.setPlaceholderText("例: 1.1.1.1, 8.8.8.8 (カンマ区切り・任意)")
+
+        self.sp_rollback = QSpinBox()
+        self.sp_rollback.setRange(30, 600)
+        self.sp_rollback.setValue(default_rollback)
+        self.sp_rollback.setSuffix(" 秒")
+
+        form.addRow("インターフェース", self.cb_iface)
+        form.addRow("IP アドレス/プレフィックス", self.ed_address)
+        form.addRow("ゲートウェイ", self.ed_gateway)
+        form.addRow("DNS", self.ed_dns)
+        form.addRow("自動ロールバック", self.sp_rollback)
+
+        warn = QLabel(
+            "⚠ ネットワーク設定を変更します。誤ると SSH ごと切断されます。安全のため、"
+            "適用前にバックアップし、指定秒数内に新しい IP への疎通が確認できなければ"
+            "自動で元へ戻します。netplan(Ubuntu Server)以外の環境では実行しません。"
+            "\nsudo パスワードが必要です。")
+        warn.setWordWrap(True)
+        warn.setStyleSheet("color:#d0a050;")
+
+        buttons = QDialogButtonBox()
+        buttons.addButton("適用", QDialogButtonBox.AcceptRole)
+        buttons.addButton("キャンセル", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self._validate_accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(warn)
+        root.addWidget(buttons)
+
+    def _validate_accept(self):
+        if not self._iface() or not self.ed_address.text().strip():
+            (self.cb_iface if not self._iface() else self.ed_address).setFocus()
+            return
+        self.accept()
+
+    def _iface(self) -> str:
+        data = self.cb_iface.currentData()
+        return (data or self.cb_iface.currentText().split()[0]
+                if self.cb_iface.currentText() else "").strip()
+
+    def result_settings(self) -> dict:
+        dns = [s.strip() for s in self.ed_dns.text().split(",") if s.strip()]
+        return {
+            "iface": self._iface(),
+            "address_cidr": self.ed_address.text().strip(),
+            "gateway": self.ed_gateway.text().strip(),
+            "nameservers": dns,
+            "rollback_sec": self.sp_rollback.value(),
+        }
+
+
 class P2PSendDialog(QDialog):
     """P2P 送信の宛先入力(Issue #43)。"""
 
