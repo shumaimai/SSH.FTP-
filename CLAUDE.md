@@ -57,6 +57,9 @@ hashi/portability.py   接続情報の書き出し/読み込み(#42)。known_hos
 hashi/sshd_admin.py    sshd 堅牢化(#12): パスワード無効化/ポート変更。鍵ログイン検証→
                        バックアップ→sshd -t→reload→疎通確認→自動ロールバック。
 hashi/p2p.py           P2P 共有(#43)。SAS 認証つき ECDH でバンドルを直接転送。
+hashi/cloudsync.py     アカウント同期(#44)。バンドルを scrypt+Fernet で E2E 暗号化し
+                       Google Drive appDataFolder へ put/get。backend 差し替え可能。
+                       google 系ライブラリは任意依存(requirements-cloud.txt)。
 tools/doctor.py        CLI 接続診断(TCP→ホスト鍵→認証→SFTP→シェル)。
 tests/                 pytest(ネットワーク不要。フェイク SSH を conftest に用意)。
 ```

@@ -372,6 +372,31 @@ class P2PReceiveWorker(_P2PWorkerBase):
                     logger.debug("P2P リッスンソケットのクローズに失敗", exc_info=True)
 
 
+class CloudSyncWorker(QThread):
+    """クラウド同期(アップロード/ダウンロード)を GUI スレッド外で実行する。
+
+    ネットワーク・OAuth はブロッキングなので必ずワーカーで動かす。渡された
+    callable を呼び、結果 or 例外メッセージを Signal で返すだけの汎用ワーカー。
+    """
+
+    ok = Signal(object)
+    fail = Signal(str)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        from .cloudsync import CloudSyncError
+        try:
+            self.ok.emit(self.fn())
+        except CloudSyncError as e:
+            self.fail.emit(str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("クラウド同期で予期しない例外", exc_info=True)
+            self.fail.emit(f"予期しないエラー: {e}")
+
+
 class SecretContext:
     """1 接続分の秘密情報を集約(sudo 提供・パスワード自動入力の供給源)。"""
 
@@ -808,6 +833,99 @@ class _SharedOps:
         self.statusBar().showMessage(
             "P2P: 失敗しました" if msg else "P2P: 中止しました", 4000)
 
+    # ---- クラウド同期 (Issue #44) -------------------------------------------
+    def _cloud_backend(self):
+        """同期先 backend を作る。今は Google Drive のみ。"""
+        from .cloudsync import GoogleDriveBackend
+        return GoogleDriveBackend()
+
+    def _run_cloud(self, fn, on_ok, busy_msg):
+        worker = CloudSyncWorker(fn)
+        worker.ok.connect(on_ok)
+        worker.fail.connect(
+            lambda msg: QMessageBox.warning(self, "クラウド同期", msg))
+        worker.finished.connect(lambda w=worker: self._cloud_workers.remove(w))
+        self._cloud_workers.append(worker)
+        self.statusBar().showMessage(busy_msg)
+        worker.start()
+
+    def _cloud_upload(self):
+        from . import cloudsync
+        if not self.store.profiles:
+            QMessageBox.information(self, "クラウド同期",
+                                    "アップロードするプロファイルがありません。")
+            return
+        master = self._ask_new_export_passphrase()   # 2 回入力で確認
+        if master is None:
+            return
+        secrets_pp = None
+        if self.credentials.available:
+            r = QMessageBox.question(
+                self, "クラウド同期",
+                "保存済みの秘密情報も同期しますか?\n"
+                "(含める場合は別のパスフレーズで暗号化します)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if r == QMessageBox.Yes:
+                secrets_pp = self._ask_new_export_passphrase()
+                if secrets_pp is None:
+                    return
+        backend = self._cloud_backend()
+        profiles = list(self.store.profiles)
+        kh, creds = self.known_hosts, self.credentials
+
+        def job():
+            return cloudsync.push(backend, profiles, kh, master,
+                                  creds if secrets_pp else None, secrets_pp)
+
+        self._run_cloud(
+            job,
+            lambda res: QMessageBox.information(
+                self, "クラウド同期",
+                f"{res['profiles']} 件をアップロードしました"
+                + (f"(秘密情報 {res['secrets']} 件含む)"
+                   if res["secrets"] else "")),
+            "クラウドへアップロードしています…")
+
+    def _cloud_download(self):
+        from . import cloudsync
+        master = ask_secret(self, "クラウド同期のマスターパスフレーズを入力")
+        if not master:
+            return
+        secrets_pp = None
+        if self.credentials.available:
+            r = QMessageBox.question(
+                self, "クラウド同期",
+                "同期データに秘密情報が含まれていれば取り込みますか?\n"
+                "(取り込む場合は暗号化に使ったパスフレーズが必要)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if r == QMessageBox.Yes:
+                secrets_pp = ask_secret(self, "秘密情報のパスフレーズを入力")
+        backend = self._cloud_backend()
+        store, kh, creds = self.store, self.known_hosts, self.credentials
+
+        def job():
+            return cloudsync.pull_and_merge(
+                backend, master, store, kh,
+                creds if secrets_pp else None, secrets_pp, overwrite=True)
+
+        self._run_cloud(job, self._on_cloud_downloaded,
+                        "クラウドからダウンロードしています…")
+
+    def _on_cloud_downloaded(self, counts: dict):
+        if counts.get("empty"):
+            QMessageBox.information(self, "クラウド同期",
+                                    "クラウドに同期データがありませんでした。")
+            return
+        self._refresh_profile_lists()
+        msg = (f"追加 {counts['added']} 件 / 上書き {counts['updated']} 件 / "
+               f"スキップ {counts['skipped']} 件\n"
+               f"ホスト鍵 {counts['hosts_added']} 件を追加")
+        if counts.get("secrets"):
+            msg += f"\n秘密情報 {counts['secrets']} 件を保存"
+        if counts.get("backup"):
+            msg += f"\n取り込み前の手元をバックアップ: {counts['backup']}"
+        QMessageBox.information(self, "クラウド同期", msg)
+
     # ---- 鍵生成 (Issue #12) -------------------------------------------------
     def _generate_key(self):
         tab = getattr(self, "session_tab", None)
@@ -875,6 +993,7 @@ class LauncherWindow(_SharedOps, QMainWindow):
         self.credentials = services["credentials"]
         self._keygen_workers: list[KeygenWorker] = []
         self._p2p_workers: list[_P2PWorkerBase] = []
+        self._cloud_workers: list[CloudSyncWorker] = []
         LauncherWindow._instance = self
 
         central = QWidget()
@@ -911,6 +1030,9 @@ class LauncherWindow(_SharedOps, QMainWindow):
         m_file.addSeparator()
         m_file.addAction("接続情報を送信 (P2P)…", self._p2p_send)
         m_file.addAction("接続情報を受信 (P2P)…", self._p2p_receive)
+        m_file.addSeparator()
+        m_file.addAction("クラウドへアップロード…", self._cloud_upload)
+        m_file.addAction("クラウドからダウンロード…", self._cloud_download)
         m_file.addSeparator()
         m_file.addAction("設定…", self._open_settings)
         m_file.addSeparator()
@@ -1004,6 +1126,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self._keygen_workers: list[KeygenWorker] = []
         self._sshd_workers: list[SshdHardenWorker] = []
         self._p2p_workers: list[_P2PWorkerBase] = []
+        self._cloud_workers: list[CloudSyncWorker] = []
         SessionWindow._windows.append(self)
 
         self.resize(1280, 760)
@@ -1019,6 +1142,9 @@ class SessionWindow(_SharedOps, QMainWindow):
         m_file.addSeparator()
         m_file.addAction("接続情報を書き出す…", self._export_profiles)
         m_file.addAction("接続情報を読み込む…", self._import_profiles)
+        m_file.addSeparator()
+        m_file.addAction("クラウドへアップロード…", self._cloud_upload)
+        m_file.addAction("クラウドからダウンロード…", self._cloud_download)
         m_file.addSeparator()
         m_file.addAction("設定…", self._open_settings)
         m_file.addSeparator()

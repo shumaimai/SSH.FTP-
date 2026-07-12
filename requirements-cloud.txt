@@ -1,0 +1,6 @@
+# クラウド同期(Issue #44 / Google Drive appDataFolder)を使うときだけ必要な任意依存。
+# 未インストールでもアプリは起動し、クラウド同期メニューを使ったときに
+# 分かりやすいエラーで案内する(それ以外の機能には影響しない)。
+# 使う場合: pip install -r requirements-cloud.txt
+google-api-python-client>=2.0
+google-auth-oauthlib>=1.0
