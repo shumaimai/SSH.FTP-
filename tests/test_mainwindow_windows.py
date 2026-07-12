@@ -1,8 +1,7 @@
-"""複数ウィンドウ接続(Issue #14 段階1)のテスト。
+"""ランチャー + 1接続1ウィンドウ(Issue #14 段階2)のテスト。
 
-新しいウィンドウがストア(プロファイル / 既知ホスト / 認証情報 / 設定)を
-共有して開き、そこで接続処理が始まることを確認する。実接続はさせない
-(_connect_profile を差し替え)。
+ランチャーから接続すると、ストアを共有した独立 SessionWindow が開き、そこで
+接続処理が始まることを確認する。実接続はさせない(start_connect を差し替え)。
 """
 import pytest
 
@@ -10,77 +9,74 @@ from hashi.config import Profile
 
 
 @pytest.fixture()
-def main_window(qapp, tmp_path, monkeypatch):
-    # 設定ディレクトリを隔離(実ユーザーの config を触らない)
+def launcher(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
-    from hashi.mainwindow import MainWindow
-    before = list(MainWindow._windows)
-    w = MainWindow()
+    from hashi.mainwindow import LauncherWindow, SessionWindow
+    before = list(SessionWindow._windows)
+    w = LauncherWindow()
     yield w
-    # 後始末: このテストで開いたウィンドウを閉じる
-    for win in list(MainWindow._windows):
+    for win in list(SessionWindow._windows):
         if win not in before:
+            win.session_tab = None   # shutdown を避ける
             win.close()
+    w.close()
 
 
-def test_new_window_shares_services_and_connects(main_window, monkeypatch):
-    from hashi.mainwindow import MainWindow
+def test_connect_opens_session_window_sharing_services(launcher, monkeypatch):
+    from hashi.mainwindow import SessionWindow
 
-    calls = []
-    monkeypatch.setattr(MainWindow, "_connect_profile",
-                        lambda self, p: calls.append((self, p)))
+    started = []
+    monkeypatch.setattr(SessionWindow, "start_connect",
+                        lambda self: started.append(self))
 
-    n_before = len(MainWindow._windows)
+    n_before = len(SessionWindow._windows)
     profile = Profile(host="h", username="u")
-    main_window._connect_in_new_window(profile)
+    launcher._connect(profile)
 
-    assert len(MainWindow._windows) == n_before + 1
-    child = MainWindow._windows[-1]
-    assert child is not main_window
+    assert len(SessionWindow._windows) == n_before + 1
+    win = SessionWindow._windows[-1]
+    assert win.profile is profile
     # ストア類は同一実体を共有
-    assert child.store is main_window.store
-    assert child.known_hosts is main_window.known_hosts
-    assert child.credentials is main_window.credentials
-    assert child.settings is main_window.settings
-    # 新ウィンドウ側で接続が始まった
-    assert calls and calls[-1][0] is child and calls[-1][1] is profile
+    assert win.store is launcher.store
+    assert win.known_hosts is launcher.known_hosts
+    assert win.credentials is launcher.credentials
+    assert win.settings is launcher.settings
+    # 接続が始まった / セッションメニューは接続完了まで無効
+    assert started == [win]
+    assert not win.m_sess.isEnabled()
 
 
-def test_close_deregisters_window(main_window):
-    from hashi.mainwindow import MainWindow
+def test_doubleclick_connects(launcher, monkeypatch):
+    launcher.store.profiles.append(Profile(host="h", username="u"))
+    launcher._reload_list()
+    connected = []
+    monkeypatch.setattr(type(launcher), "_connect",
+                        lambda self, p: connected.append(p))
+    launcher._connect_item(launcher.list.item(0))
+    assert len(connected) == 1
 
-    services = main_window._services
-    child = MainWindow(services=services)
-    assert child in MainWindow._windows
-    child.close()
-    assert child not in MainWindow._windows
+
+def test_session_close_deregisters(launcher, monkeypatch):
+    from hashi.mainwindow import SessionWindow
+
+    monkeypatch.setattr(SessionWindow, "start_connect", lambda self: None)
+    launcher._connect(Profile(host="h", username="u"))
+    win = SessionWindow._windows[-1]
+    assert win in SessionWindow._windows
+    win.close()
+    assert win not in SessionWindow._windows
 
 
-def test_ctrl_doubleclick_opens_new_window(main_window, monkeypatch):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
+def test_import_from_session_refreshes_launcher_list(launcher, monkeypatch):
+    """セッションウィンドウでの読み込みがランチャーの一覧を更新する。"""
+    from hashi.mainwindow import SessionWindow
 
-    from hashi.mainwindow import MainWindow
-
-    main_window.store.profiles.append(Profile(host="h", username="u"))
-    main_window._reload_list()
-
-    new_win = []
-    normal = []
-    monkeypatch.setattr(MainWindow, "_connect_in_new_window",
-                        lambda self, p: new_win.append(p))
-    monkeypatch.setattr(MainWindow, "_connect_profile",
-                        lambda self, p: normal.append(p))
-
-    item = main_window.list.item(0)
-
-    monkeypatch.setattr(QApplication, "keyboardModifiers",
-                        staticmethod(lambda: Qt.ControlModifier))
-    main_window._connect_item(item)
-    assert len(new_win) == 1 and not normal
-
-    monkeypatch.setattr(QApplication, "keyboardModifiers",
-                        staticmethod(lambda: Qt.NoModifier))
-    main_window._connect_item(item)
-    assert len(normal) == 1
+    monkeypatch.setattr(SessionWindow, "start_connect", lambda self: None)
+    launcher._connect(Profile(host="h", username="u"))
+    win = SessionWindow._windows[-1]
+    # ストアに直接足して _refresh_profile_lists を呼ぶ
+    launcher.store.profiles.append(Profile(host="new", username="x"))
+    win._refresh_profile_lists()
+    labels = [launcher.list.item(i).text() for i in range(launcher.list.count())]
+    assert any("new" in name or "x@new" in name for name in labels)
