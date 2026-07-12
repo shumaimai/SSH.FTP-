@@ -49,8 +49,14 @@ hashi/forward.py       ローカルポートフォワード(-L)。
 hashi/filebrowser.py   SFTP ブラウザ。SftpWorker(nav/xfer の 2 スレッド・別チャネル)、
                        2 段階確認、権限無視統合、エディタ連携。★このファイルが一番大きい。
 hashi/dialogs.py       接続 / ホスト鍵 / 秘密入力 / 設定 / トンネル ダイアログ。
-hashi/mainwindow.py    サイドバー + セッションタブ + ConnectWorker + 自動入力の配線 +
-                       SecretContext(sudo/パスワード供給源)。
+hashi/mainwindow.py    LauncherWindow(接続先選択)+ SessionWindow(1 接続 1 ウィンドウ)+
+                       ConnectWorker + 自動入力の配線 + SecretContext(sudo/パスワード供給源)。
+                       共有メニュー操作は _SharedOps mixin。旧 MainWindow は LauncherWindow の別名。
+hashi/portability.py   接続情報の書き出し/読み込み(#42)。known_hosts も含む。秘密情報は
+                       パスフレーズ暗号化必須。dumps/loads_bundle は P2P と共用。
+hashi/sshd_admin.py    sshd 堅牢化(#12): パスワード無効化/ポート変更。鍵ログイン検証→
+                       バックアップ→sshd -t→reload→疎通確認→自動ロールバック。
+hashi/p2p.py           P2P 共有(#43)。SAS 認証つき ECDH でバンドルを直接転送。
 tools/doctor.py        CLI 接続診断(TCP→ホスト鍵→認証→SFTP→シェル)。
 tests/                 pytest(ネットワーク不要。フェイク SSH を conftest に用意)。
 ```

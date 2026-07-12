@@ -12,7 +12,6 @@ import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -636,113 +634,13 @@ class SessionTab(QWidget):
         self.session.close()
 
 
-class MainWindow(QMainWindow):
-    # 開いている全ウィンドウを保持(GC 防止)。複数ウィンドウ接続(Issue #14)で使う。
-    _windows: list["MainWindow"] = []
+class _SharedOps:
+    """ランチャーとセッションウィンドウで共通のメニュー操作。
 
-    def __init__(self, services: dict | None = None):
-        super().__init__()
-        self.setWindowTitle(f"Hashi — SSH / SFTP クライアント v{APP_VERSION}")
-        self.resize(1280, 760)
-
-        # ストア類はウィンドウ間で共有する(プロファイル / 既知ホスト / 認証情報 /
-        # 設定は 1 つの実体を全ウィンドウで使う)。services 未指定なら新規作成。
-        if services is None:
-            services = {
-                "store": ProfileStore(),
-                "known_hosts": KnownHosts(),
-                "settings": Settings(),
-                "credentials": CredentialStore(),
-            }
-        self._services = services
-        self.store = services["store"]
-        self.known_hosts = services["known_hosts"]
-        self.settings = services["settings"]
-        self.credentials = services["credentials"]
-        MainWindow._windows.append(self)
-        self._workers: list[ConnectWorker] = []
-        self._keygen_workers: list[KeygenWorker] = []
-        self._sshd_workers: list[SshdHardenWorker] = []
-        self._p2p_workers: list[_P2PWorkerBase] = []
-
-        # サイドバー
-        side = QWidget()
-        sv = QVBoxLayout(side)
-        sv.setContentsMargins(6, 6, 6, 6)
-        btn_new = QPushButton("＋ 新しい接続")
-        btn_new.clicked.connect(self.new_profile)
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(self._connect_item)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.list.customContextMenuRequested.connect(self._profile_menu)
-        hint = QLabel("ダブルクリックで接続 (Ctrl+ダブルクリックで新ウィンドウ)\n"
-                      "右クリックで編集/削除")
-        hint.setStyleSheet("color:#8a919e;")
-        sv.addWidget(btn_new)
-        sv.addWidget(self.list, 1)
-        sv.addWidget(hint)
-        side.setMaximumWidth(240)
-
-        # タブ
-        self.tabs = QTabWidget()
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
-        self.tabs.tabCloseRequested.connect(self._close_tab)
-        placeholder = QLabel(
-            "左のプロファイルをダブルクリックして接続\n"
-            "または「＋ 新しい接続」から追加"
-        )
-        placeholder.setAlignment(Qt.AlignCenter)
-        placeholder.setStyleSheet("color:#8a919e; font-size:14px;")
-        self.tabs.addTab(placeholder, "ようこそ")
-        self._welcome_page = placeholder
-
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(side)
-        splitter.addWidget(self.tabs)
-        splitter.setStretchFactor(1, 1)
-        self.setCentralWidget(splitter)
-
-        self._build_menu()
-        self._reload_list()
-        self.statusBar().showMessage("準備完了")
-
-    # ---- メニュー -----------------------------------------------------------
-    def _build_menu(self):
-        m_file = self.menuBar().addMenu("ファイル")
-        m_file.addAction("新しい接続…", self.new_profile)
-        m_file.addSeparator()
-        m_file.addAction("接続情報を書き出す…", self._export_profiles)
-        m_file.addAction("接続情報を読み込む…", self._import_profiles)
-        m_file.addSeparator()
-        m_file.addAction("接続情報を送信 (P2P)…", self._p2p_send)
-        m_file.addAction("接続情報を受信 (P2P)…", self._p2p_receive)
-        m_file.addSeparator()
-        m_file.addAction("設定…", self._open_settings)
-        m_file.addSeparator()
-        m_file.addAction("終了", self.close)
-
-        m_view = self.menuBar().addMenu("表示")
-        act_plus = m_view.addAction("ターミナル文字を大きく")
-        act_plus.setShortcut("Ctrl+=")
-        act_plus.triggered.connect(lambda: self._font_delta(+1))
-        act_minus = m_view.addAction("ターミナル文字を小さく")
-        act_minus.setShortcut("Ctrl+-")
-        act_minus.triggered.connect(lambda: self._font_delta(-1))
-
-        m_sess = self.menuBar().addMenu("セッション")
-        m_sess.addAction("ポートフォワードを追加…", self._add_tunnel)
-        m_sess.addAction("ポートフォワード一覧…", self._list_tunnels)
-        m_sess.addAction("SSH 鍵を生成…", self._generate_key)
-        m_sess.addAction("SSH サーバー設定を変更…", self._harden_sshd)
-        m_sess.addSeparator()
-        m_sess.addAction("この接続の保存パスワードを削除", self._forget_credentials)
-
-        m_help = self.menuBar().addMenu("ヘルプ")
-        m_help.addAction("Hashi について", self._about)
-
-    def _open_settings(self):
-        SettingsDialog(self.settings, self).exec()
+    self.store / known_hosts / credentials / settings と、鍵生成/P2P 用の
+    worker リストを前提にする。プロファイル一覧の再描画は各クラスが
+    _refresh_profile_lists() で実装する。
+    """
 
     # ---- 書き出し / 読み込み (Issue #42) -------------------------------------
     def _export_profiles(self):
@@ -836,7 +734,7 @@ class MainWindow(QMainWindow):
             overwrite = r == QMessageBox.Yes
         counts = portability.merge_bundle(
             bundle, self.store, self.known_hosts, self.credentials, overwrite)
-        self._reload_list()
+        self._refresh_profile_lists()
         msg = (f"追加 {counts['added']} 件 / 上書き {counts['updated']} 件 / "
                f"スキップ {counts['skipped']} 件\n"
                f"ホスト鍵の記録を {counts['hosts_added']} 件追加"
@@ -910,43 +808,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "P2P: 失敗しました" if msg else "P2P: 中止しました", 4000)
 
-    def _current_tab(self):
-        w = self.tabs.currentWidget()
-        return w if isinstance(w, SessionTab) else None
-
-    def _add_tunnel(self):
-        tab = self._current_tab()
-        if not tab:
-            QMessageBox.information(self, "ポートフォワード", "接続中のタブがありません。")
-            return
-        dlg = TunnelDialog(self)
-        if dlg.exec():
-            try:
-                label = tab.add_tunnel(dlg.result())
-                self.statusBar().showMessage(f"ポートフォワード開始: {label}", 5000)
-            except Exception as e:  # noqa: BLE001
-                QMessageBox.warning(self, "ポートフォワード", f"開始できません:\n{e}")
-
-    def _list_tunnels(self):
-        tab = self._current_tab()
-        if not tab or not tab.tunnels:
-            QMessageBox.information(self, "ポートフォワード", "有効なトンネルはありません。")
-            return
-        lines = "\n".join(f"・{fw.label()}" for fw in tab.tunnels)
-        QMessageBox.information(self, "ポートフォワード", lines)
-
-    def _forget_credentials(self):
-        tab = self._current_tab()
-        prof = tab.session.profile if tab else None
-        if prof is None:
-            QMessageBox.information(self, "認証情報", "接続中のタブがありません。")
-            return
-        self.credentials.clear_profile(prof)
-        self.statusBar().showMessage(
-            f"{prof.label()} の保存パスワードを削除しました", 5000)
-
+    # ---- 鍵生成 (Issue #12) -------------------------------------------------
     def _generate_key(self):
-        tab = self._current_tab()
+        tab = getattr(self, "session_tab", None)
         dlg = KeygenDialog(self, can_register=tab is not None)
         if not dlg.exec():
             return
@@ -970,12 +834,312 @@ class MainWindow(QMainWindow):
         )
         QMessageBox.information(self, "SSH 鍵の生成", message)
 
+    def _open_settings(self):
+        SettingsDialog(self.settings, self).exec()
+
+    def _about(self):
+        QMessageBox.information(
+            self, "Hashi について",
+            f"Hashi v{APP_VERSION}\n\n"
+            "SSH ターミナル + SFTP ファイルブラウザ\n"
+            "橋 (bridge) — ローカルとリモートをつなぐ。\n\n"
+            "Python / PySide6 / paramiko / pyte",
+        )
+
+
+class LauncherWindow(_SharedOps, QMainWindow):
+    """起動時のサーバー選択ランチャー(Issue #14 段階2)。
+
+    接続すると常に独立した SessionWindow を開く。タブは持たない。
+    ストア類(プロファイル/既知ホスト/認証情報/設定)は全ウィンドウで共有する。
+    """
+
+    _instance: "LauncherWindow | None" = None
+
+    def __init__(self, services: dict | None = None):
+        super().__init__()
+        self.setWindowTitle(f"Hashi — 接続先を選択 v{APP_VERSION}")
+        self.resize(420, 640)
+
+        if services is None:
+            services = {
+                "store": ProfileStore(),
+                "known_hosts": KnownHosts(),
+                "settings": Settings(),
+                "credentials": CredentialStore(),
+            }
+        self._services = services
+        self.store = services["store"]
+        self.known_hosts = services["known_hosts"]
+        self.settings = services["settings"]
+        self.credentials = services["credentials"]
+        self._keygen_workers: list[KeygenWorker] = []
+        self._p2p_workers: list[_P2PWorkerBase] = []
+        LauncherWindow._instance = self
+
+        central = QWidget()
+        v = QVBoxLayout(central)
+        v.setContentsMargins(10, 10, 10, 10)
+        title = QLabel("接続先を選択")
+        title.setStyleSheet("font-size:16px; font-weight:bold;")
+        btn_new = QPushButton("＋ 新しい接続")
+        btn_new.clicked.connect(self.new_profile)
+        self.list = QListWidget()
+        self.list.itemDoubleClicked.connect(self._connect_item)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._profile_menu)
+        hint = QLabel("ダブルクリックで接続(新しいウィンドウが開きます)\n"
+                      "右クリックで編集/削除")
+        hint.setStyleSheet("color:#8a919e;")
+        v.addWidget(title)
+        v.addWidget(btn_new)
+        v.addWidget(self.list, 1)
+        v.addWidget(hint)
+        self.setCentralWidget(central)
+
+        self._build_menu()
+        self._reload_list()
+        self.statusBar().showMessage("準備完了")
+
+    def _build_menu(self):
+        m_file = self.menuBar().addMenu("ファイル")
+        m_file.addAction("新しい接続…", self.new_profile)
+        m_file.addAction("SSH 鍵を生成…", self._generate_key)
+        m_file.addSeparator()
+        m_file.addAction("接続情報を書き出す…", self._export_profiles)
+        m_file.addAction("接続情報を読み込む…", self._import_profiles)
+        m_file.addSeparator()
+        m_file.addAction("接続情報を送信 (P2P)…", self._p2p_send)
+        m_file.addAction("接続情報を受信 (P2P)…", self._p2p_receive)
+        m_file.addSeparator()
+        m_file.addAction("設定…", self._open_settings)
+        m_file.addSeparator()
+        m_file.addAction("終了", self.close)
+
+        m_help = self.menuBar().addMenu("ヘルプ")
+        m_help.addAction("Hashi について", self._about)
+
+    def _refresh_profile_lists(self):
+        self._reload_list()
+
+    def _reload_list(self):
+        self.list.clear()
+        for p in self.store.profiles:
+            item = QListWidgetItem(p.label())
+            item.setToolTip(f"{p.username}@{p.host}:{p.port} ({p.auth_method})")
+            self.list.addItem(item)
+
+    def new_profile(self):
+        dlg = ConnectDialog(self, credentials=self.credentials)
+        if dlg.exec():
+            profile = dlg.result_profile()
+            self.store.add(profile)
+            dlg.apply_credentials(profile)
+            self._reload_list()
+
+    def _profile_menu(self, pos):
+        row = self.list.currentRow()
+        if row < 0:
+            return
+        menu = QMenu(self)
+        a_conn = menu.addAction("接続(新しいウィンドウ)")
+        a_edit = menu.addAction("編集…")
+        a_del = menu.addAction("削除")
+        chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
+        if chosen is a_conn:
+            self._connect(self.store.profiles[row])
+        elif chosen is a_edit:
+            dlg = ConnectDialog(
+                self, self.store.profiles[row], self.credentials)
+            if dlg.exec():
+                profile = dlg.result_profile()
+                self.store.update(row, profile)
+                dlg.apply_credentials(profile)
+                self._reload_list()
+        elif chosen is a_del:
+            p = self.store.profiles[row]
+            r = QMessageBox.question(
+                self, "プロファイルの削除",
+                f"「{p.label()}」を一覧から削除しますか?\n(サーバー側には何も影響しません)",
+            )
+            if r == QMessageBox.Yes:
+                self.store.remove(row)
+                self._reload_list()
+
+    def _connect_item(self, item: QListWidgetItem):
+        row = self.list.row(item)
+        if 0 <= row < len(self.store.profiles):
+            self._connect(self.store.profiles[row])
+
+    def _connect(self, profile: Profile):
+        """独立したウィンドウを開いて接続する(常に新ウィンドウ)。"""
+        win = SessionWindow(self._services, profile, launcher=self)
+        win.show()
+        win.start_connect()
+
+    def closeEvent(self, ev):
+        # ランチャーを閉じてもセッションウィンドウは残す(アプリは最後の
+        # ウィンドウが閉じたときに終了する)。
+        if LauncherWindow._instance is self:
+            LauncherWindow._instance = None
+        ev.accept()
+
+
+class SessionWindow(_SharedOps, QMainWindow):
+    """1 接続 = 1 ウィンドウ(Issue #14 段階2)。セッションメニューを内蔵する。"""
+
+    _windows: list["SessionWindow"] = []
+
+    def __init__(self, services: dict, profile: Profile, launcher=None):
+        super().__init__()
+        self._services = services
+        self.store = services["store"]
+        self.known_hosts = services["known_hosts"]
+        self.settings = services["settings"]
+        self.credentials = services["credentials"]
+        self._launcher = launcher
+        self.profile = profile
+        self.session_tab: SessionTab | None = None
+        self._workers: list[ConnectWorker] = []
+        self._keygen_workers: list[KeygenWorker] = []
+        self._sshd_workers: list[SshdHardenWorker] = []
+        self._p2p_workers: list[_P2PWorkerBase] = []
+        SessionWindow._windows.append(self)
+
+        self.resize(1280, 760)
+        self.setWindowTitle(f"接続中: {profile.label()}")
+        self._connecting = ConnectingWidget(profile)
+        self.setCentralWidget(self._connecting)
+        self._build_menu()
+        self.statusBar().showMessage(f"{profile.label()} に接続中…")
+
+    def _build_menu(self):
+        m_file = self.menuBar().addMenu("ファイル")
+        m_file.addAction("サーバー一覧を開く", self._open_launcher)
+        m_file.addSeparator()
+        m_file.addAction("接続情報を書き出す…", self._export_profiles)
+        m_file.addAction("接続情報を読み込む…", self._import_profiles)
+        m_file.addSeparator()
+        m_file.addAction("設定…", self._open_settings)
+        m_file.addSeparator()
+        m_file.addAction("このウィンドウを閉じる", self.close)
+
+        m_view = self.menuBar().addMenu("表示")
+        act_plus = m_view.addAction("ターミナル文字を大きく")
+        act_plus.setShortcut("Ctrl+=")
+        act_plus.triggered.connect(lambda: self._font_delta(+1))
+        act_minus = m_view.addAction("ターミナル文字を小さく")
+        act_minus.setShortcut("Ctrl+-")
+        act_minus.triggered.connect(lambda: self._font_delta(-1))
+
+        self.m_sess = self.menuBar().addMenu("セッション")
+        self.m_sess.addAction("ポートフォワードを追加…", self._add_tunnel)
+        self.m_sess.addAction("ポートフォワード一覧…", self._list_tunnels)
+        self.m_sess.addAction("SSH 鍵を生成…", self._generate_key)
+        self.m_sess.addAction("SSH サーバー設定を変更…", self._harden_sshd)
+        self.m_sess.addSeparator()
+        self.m_sess.addAction("この接続の保存パスワードを削除",
+                              self._forget_credentials)
+        self.m_sess.setEnabled(False)   # 接続完了までは無効
+
+        m_help = self.menuBar().addMenu("ヘルプ")
+        m_help.addAction("Hashi について", self._about)
+
+    def _refresh_profile_lists(self):
+        if self._launcher is not None:
+            self._launcher._reload_list()
+        elif LauncherWindow._instance is not None:
+            LauncherWindow._instance._reload_list()
+
+    def _open_launcher(self):
+        inst = LauncherWindow._instance
+        if inst is None:
+            inst = LauncherWindow(services=self._services)
+        inst.show()
+        inst.raise_()
+        inst.activateWindow()
+
+    # ---- 接続 --------------------------------------------------------------
+    def start_connect(self):
+        worker = ConnectWorker(self.profile, self.known_hosts, self.credentials)
+        worker.ask_secret.connect(
+            lambda prompt, ds, cs, w=worker:
+            w.provide(SecretDialog.ask(self, prompt, ds, cs))
+        )
+        worker.ask_hostkey.connect(
+            lambda info, w=worker: w.provide(HostKeyDialog.ask(self, info))
+        )
+        worker.ok.connect(lambda s, w=worker: self._on_connected(s, w))
+        worker.fail.connect(self._on_connect_failed)
+        worker.finished.connect(lambda w=worker: self._workers.remove(w))
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_connected(self, session: SshSession, worker: ConnectWorker):
+        ctx = SecretContext(session.profile, self.credentials,
+                            self.settings, self)
+        if worker.used_password:
+            ctx.note_login_password(worker.used_password)
+        tab = SessionTab(session, self.settings, ctx)
+        self.session_tab = tab
+        self.setCentralWidget(tab)
+        self._connecting = None
+        self.m_sess.setEnabled(True)
+        label = session.profile.label()
+        self.setWindowTitle(label)
+        tab.terminal.session_closed.connect(self._mark_disconnected)
+        self.statusBar().showMessage(f"{label} に接続しました", 5000)
+
+    def _mark_disconnected(self):
+        self.setWindowTitle(self.windowTitle().removesuffix(" (切断)") + " (切断)")
+
+    def _on_connect_failed(self, msg: str):
+        if self._connecting is not None:
+            self._connecting.show_error(msg)
+        state = "接続失敗" if msg else "接続中止"
+        self.setWindowTitle(f"{state}: {self.profile.label()}")
+        self.statusBar().showMessage(
+            "接続に失敗しました" if msg else "接続を中止しました", 4000)
+
+    # ---- セッション操作 -----------------------------------------------------
+    def _add_tunnel(self):
+        tab = self.session_tab
+        if not tab:
+            return
+        dlg = TunnelDialog(self)
+        if dlg.exec():
+            try:
+                label = tab.add_tunnel(dlg.result())
+                self.statusBar().showMessage(f"ポートフォワード開始: {label}", 5000)
+            except Exception as e:  # noqa: BLE001
+                QMessageBox.warning(self, "ポートフォワード", f"開始できません:\n{e}")
+
+    def _list_tunnels(self):
+        tab = self.session_tab
+        if not tab or not tab.tunnels:
+            QMessageBox.information(self, "ポートフォワード", "有効なトンネルはありません。")
+            return
+        lines = "\n".join(f"・{fw.label()}" for fw in tab.tunnels)
+        QMessageBox.information(self, "ポートフォワード", lines)
+
+    def _forget_credentials(self):
+        tab = self.session_tab
+        if tab is None:
+            return
+        prof = tab.session.profile
+        self.credentials.clear_profile(prof)
+        self.statusBar().showMessage(
+            f"{prof.label()} の保存パスワードを削除しました", 5000)
+
+    def _font_delta(self, d: int):
+        tab = self.session_tab
+        if tab is not None:
+            tab.terminal.set_font_size(tab.terminal.font_size() + d)
+
     # ---- sshd 堅牢化 (Issue #12) --------------------------------------------
     def _harden_sshd(self):
-        tab = self._current_tab()
+        tab = self.session_tab
         if not tab:
-            QMessageBox.information(self, "SSH サーバー設定",
-                                    "接続中のタブがありません。")
             return
         session = tab.session
         session._hashi_sudo_pw = tab.secret_ctx.get_sudo_password()
@@ -1028,177 +1192,22 @@ class MainWindow(QMainWindow):
             "ポートを変更した場合、この接続のプロファイルのポートも"
             "更新すると次回から新ポートで接続できます。")
 
-    def _font_delta(self, d: int):
-        tab = self.tabs.currentWidget()
-        if isinstance(tab, SessionTab):
-            tab.terminal.set_font_size(tab.terminal.font_size() + d)
-
-    def _about(self):
-        QMessageBox.information(
-            self, "Hashi について",
-            f"Hashi v{APP_VERSION}\n\n"
-            "SSH ターミナル + SFTP ファイルブラウザ\n"
-            "橋 (bridge) — ローカルとリモートをつなぐ。\n\n"
-            "Python / PySide6 / paramiko / pyte",
-        )
-
-    # ---- プロファイル管理 --------------------------------------------------------
-    def _reload_list(self):
-        self.list.clear()
-        for p in self.store.profiles:
-            item = QListWidgetItem(p.label())
-            item.setToolTip(f"{p.username}@{p.host}:{p.port} ({p.auth_method})")
-            self.list.addItem(item)
-
-    def new_profile(self):
-        dlg = ConnectDialog(self, credentials=self.credentials)
-        if dlg.exec():
-            profile = dlg.result_profile()
-            self.store.add(profile)
-            dlg.apply_credentials(profile)
-            self._reload_list()
-
-    def _profile_menu(self, pos):
-        row = self.list.currentRow()
-        if row < 0:
-            return
-        menu = QMenu(self)
-        a_conn = menu.addAction("接続")
-        a_conn_win = menu.addAction("新しいウィンドウで接続")
-        a_edit = menu.addAction("編集…")
-        a_del = menu.addAction("削除")
-        chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
-        if chosen is a_conn:
-            self._connect_profile(self.store.profiles[row])
-        elif chosen is a_conn_win:
-            self._connect_in_new_window(self.store.profiles[row])
-        elif chosen is a_edit:
-            dlg = ConnectDialog(
-                self, self.store.profiles[row], self.credentials)
-            if dlg.exec():
-                profile = dlg.result_profile()
-                self.store.update(row, profile)
-                dlg.apply_credentials(profile)
-                self._reload_list()
-        elif chosen is a_del:
-            p = self.store.profiles[row]
-            r = QMessageBox.question(
-                self, "プロファイルの削除",
-                f"「{p.label()}」を一覧から削除しますか?\n(サーバー側には何も影響しません)",
-            )
-            if r == QMessageBox.Yes:
-                self.store.remove(row)
-                self._reload_list()
-
-    def _connect_item(self, item: QListWidgetItem):
-        row = self.list.row(item)
-        if 0 <= row < len(self.store.profiles):
-            profile = self.store.profiles[row]
-            # Ctrl+ダブルクリックは新しいウィンドウで開く(Issue #14 段階1)
-            if QApplication.keyboardModifiers() & Qt.ControlModifier:
-                self._connect_in_new_window(profile)
-            else:
-                self._connect_profile(profile)
-
-    def _connect_in_new_window(self, profile: Profile):
-        """ストアを共有した新しいウィンドウを開き、そこで接続する。"""
-        win = MainWindow(services=self._services)
-        win.show()
-        win._connect_profile(profile)
-
-    # ---- 接続 --------------------------------------------------------------
-    def _connect_profile(self, profile: Profile):
-        self.statusBar().showMessage(f"{profile.label()} に接続中…")
-        connecting = ConnectingWidget(profile)
-        connect_idx = self.tabs.addTab(connecting, f"接続中: {profile.label()}")
-        self.tabs.setCurrentIndex(connect_idx)
-        worker = ConnectWorker(profile, self.known_hosts, self.credentials)
-        worker.ask_secret.connect(
-            lambda prompt, ds, cs, w=worker:
-            w.provide(SecretDialog.ask(self, prompt, ds, cs))
-        )
-        worker.ask_hostkey.connect(
-            lambda info, w=worker: w.provide(HostKeyDialog.ask(self, info))
-        )
-        worker.ok.connect(
-            lambda s, w=worker, page=connecting: self._on_connected(s, w, page)
-        )
-        worker.fail.connect(
-            lambda msg, page=connecting, p=profile:
-            self._on_connect_failed(msg, page, p)
-        )
-        worker.finished.connect(lambda w=worker: self._workers.remove(w))
-        self._workers.append(worker)
-        worker.start()
-
-    def _on_connected(self, session: SshSession, worker: ConnectWorker,
-                      connecting: ConnectingWidget | None = None):
-        if self._welcome_page is not None:
-            welcome_idx = self.tabs.indexOf(self._welcome_page)
-            if welcome_idx >= 0:
-                self.tabs.removeTab(welcome_idx)
-            self._welcome_page.deleteLater()
-            self._welcome_page = None
-        ctx = SecretContext(session.profile, self.credentials,
-                            self.settings, self)
-        if worker.used_password:
-            ctx.note_login_password(worker.used_password)
-        tab = SessionTab(session, self.settings, ctx)
-        label = session.profile.label()
-        idx = self.tabs.indexOf(connecting) if connecting is not None else -1
-        if idx >= 0:
-            self.tabs.removeTab(idx)
-            connecting.deleteLater()
-            idx = self.tabs.insertTab(idx, tab, label)
-        else:
-            idx = self.tabs.addTab(tab, label)
-        self.tabs.setCurrentIndex(idx)
-        tab.terminal.session_closed.connect(
-            lambda i=idx: self._mark_disconnected(tab)
-        )
-        self.statusBar().showMessage(f"{label} に接続しました", 5000)
-
-    def _mark_disconnected(self, tab: "SessionTab"):
-        idx = self.tabs.indexOf(tab)
-        if idx >= 0:
-            self.tabs.setTabText(idx, self.tabs.tabText(idx) + " (切断)")
-
-    def _on_connect_failed(self, msg: str,
-                           connecting: ConnectingWidget | None = None,
-                           profile: Profile | None = None):
-        connecting_idx = -1
-        if connecting is not None:
-            connecting_idx = self.tabs.indexOf(connecting)
-            if connecting_idx >= 0:
-                connecting.show_error(msg)
-                if profile is not None:
-                    state = "接続失敗" if msg else "接続中止"
-                    self.tabs.setTabText(
-                        connecting_idx, f"{state}: {profile.label()}")
-        if msg and connecting_idx < 0:
-            QMessageBox.warning(self, "接続エラー", msg)
-        self.statusBar().showMessage(
-            "接続に失敗しました" if msg else "接続を中止しました", 4000)
-
-    # ---- タブ/終了 -----------------------------------------------------------
-    def _close_tab(self, index: int):
-        w = self.tabs.widget(index)
-        if isinstance(w, SessionTab):
-            if w.browser.has_active_transfers():
+    def closeEvent(self, ev):
+        tab = self.session_tab
+        if tab is not None:
+            if tab.browser.has_active_transfers():
                 r = QMessageBox.question(
                     self, "転送中です",
                     "ファイル転送が進行中です。中断して切断しますか?",
                 )
                 if r != QMessageBox.Yes:
+                    ev.ignore()
                     return
-            w.shutdown()
-        self.tabs.removeTab(index)
-
-    def closeEvent(self, ev):
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
-            if isinstance(w, SessionTab):
-                w.shutdown()
-        if self in MainWindow._windows:
-            MainWindow._windows.remove(self)
+            tab.shutdown()
+        if self in SessionWindow._windows:
+            SessionWindow._windows.remove(self)
         ev.accept()
+
+
+# 後方互換: 旧名 MainWindow はランチャーを指す
+MainWindow = LauncherWindow
