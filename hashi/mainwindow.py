@@ -12,6 +12,7 @@ import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import portability
 from .config import APP_VERSION, KnownHosts, Profile, ProfileStore, Settings
 from .credentials import CredentialStore
 from .dialogs import (
@@ -37,6 +39,7 @@ from .dialogs import (
     SecretDialog,
     SettingsDialog,
     TunnelDialog,
+    ask_secret,
 )
 from .filebrowser import SftpBrowser
 from .forward import DynamicForward, Forward, LocalForward, RemoteForward
@@ -509,6 +512,9 @@ class MainWindow(QMainWindow):
         m_file = self.menuBar().addMenu("ファイル")
         m_file.addAction("新しい接続…", self.new_profile)
         m_file.addSeparator()
+        m_file.addAction("接続情報を書き出す…", self._export_profiles)
+        m_file.addAction("接続情報を読み込む…", self._import_profiles)
+        m_file.addSeparator()
         m_file.addAction("設定…", self._open_settings)
         m_file.addSeparator()
         m_file.addAction("終了", self.close)
@@ -533,6 +539,103 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self):
         SettingsDialog(self.settings, self).exec()
+
+    # ---- 書き出し / 読み込み (Issue #42) -------------------------------------
+    def _export_profiles(self):
+        if not self.store.profiles:
+            QMessageBox.information(self, "書き出し",
+                                    "書き出すプロファイルがありません。")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "接続情報を書き出す", "hashi-profiles.json",
+            "Hashi エクスポート (*.json)")
+        if not path:
+            return
+        passphrase = None
+        if self.credentials.available:
+            r = QMessageBox.question(
+                self, "秘密情報の扱い",
+                "保存済みのパスワード / パスフレーズ / sudo パスワードも"
+                "含めますか?\n(含める場合はパスフレーズで暗号化します。"
+                "平文では書き出しません)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if r == QMessageBox.Yes:
+                passphrase = self._ask_new_export_passphrase()
+                if passphrase is None:
+                    return
+        try:
+            counts = portability.export_bundle(
+                path, self.store.profiles, self.known_hosts,
+                self.credentials, passphrase)
+        except portability.PortabilityError as e:
+            QMessageBox.warning(self, "書き出し", str(e))
+            return
+        msg = f"{counts['profiles']} 件のプロファイルを書き出しました。"
+        if passphrase:
+            msg += f"\n(暗号化した秘密情報 {counts['secrets']} 件を含む)"
+        else:
+            msg += "\n(パスワード等の秘密情報は含まれていません)"
+        QMessageBox.information(self, "書き出し", msg)
+
+    def _ask_new_export_passphrase(self) -> str | None:
+        while True:
+            p1 = ask_secret(self, "エクスポート用のパスフレーズを入力")
+            if p1 is None:
+                return None
+            if not p1:
+                QMessageBox.warning(self, "書き出し",
+                                    "パスフレーズを空にはできません。")
+                continue
+            p2 = ask_secret(self, "確認のためもう一度入力")
+            if p2 is None:
+                return None
+            if p1 == p2:
+                return p1
+            QMessageBox.warning(self, "書き出し", "パスフレーズが一致しません。")
+
+    def _import_profiles(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "接続情報を読み込む", "",
+            "Hashi エクスポート (*.json);;すべてのファイル (*)")
+        if not path:
+            return
+        try:
+            bundle = portability.load_bundle(path)
+        except portability.PortabilityError as e:
+            QMessageBox.warning(self, "読み込み", str(e))
+            return
+        if bundle.has_encrypted_secrets and self.credentials.available:
+            for _ in range(3):
+                pw = ask_secret(
+                    self, "エクスポート時のパスフレーズを入力\n"
+                    "(キャンセルすると秘密情報を除いて読み込みます)")
+                if pw is None:
+                    break
+                try:
+                    bundle.decrypt_secrets(pw)
+                    break
+                except portability.PortabilityError as e:
+                    QMessageBox.warning(self, "読み込み", str(e))
+        overwrite = False
+        ids = {p.id_str() for p in self.store.profiles}
+        dups = sum(1 for p in bundle.profiles if p.id_str() in ids)
+        if dups:
+            r = QMessageBox.question(
+                self, "読み込み",
+                f"既存と重複するプロファイルが {dups} 件あります。"
+                "上書きしますか?\n(いいえ = 既存を残してスキップ)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            overwrite = r == QMessageBox.Yes
+        counts = portability.merge_bundle(
+            bundle, self.store, self.known_hosts, self.credentials, overwrite)
+        self._reload_list()
+        msg = (f"追加 {counts['added']} 件 / 上書き {counts['updated']} 件 / "
+               f"スキップ {counts['skipped']} 件\n"
+               f"ホスト鍵の記録を {counts['hosts_added']} 件追加"
+               "(既存の記録は上書きしません)")
+        if counts["secrets"]:
+            msg += f"\n秘密情報 {counts['secrets']} 件を保存しました"
+        QMessageBox.information(self, "読み込み", msg)
 
     def _current_tab(self):
         w = self.tabs.currentWidget()
