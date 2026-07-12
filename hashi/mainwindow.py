@@ -12,6 +12,7 @@ import threading
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -542,15 +543,29 @@ class SessionTab(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    # 開いている全ウィンドウを保持(GC 防止)。複数ウィンドウ接続(Issue #14)で使う。
+    _windows: list["MainWindow"] = []
+
+    def __init__(self, services: dict | None = None):
         super().__init__()
         self.setWindowTitle(f"Hashi — SSH / SFTP クライアント v{APP_VERSION}")
         self.resize(1280, 760)
 
-        self.store = ProfileStore()
-        self.known_hosts = KnownHosts()
-        self.settings = Settings()
-        self.credentials = CredentialStore()
+        # ストア類はウィンドウ間で共有する(プロファイル / 既知ホスト / 認証情報 /
+        # 設定は 1 つの実体を全ウィンドウで使う)。services 未指定なら新規作成。
+        if services is None:
+            services = {
+                "store": ProfileStore(),
+                "known_hosts": KnownHosts(),
+                "settings": Settings(),
+                "credentials": CredentialStore(),
+            }
+        self._services = services
+        self.store = services["store"]
+        self.known_hosts = services["known_hosts"]
+        self.settings = services["settings"]
+        self.credentials = services["credentials"]
+        MainWindow._windows.append(self)
         self._workers: list[ConnectWorker] = []
         self._keygen_workers: list[KeygenWorker] = []
         self._sshd_workers: list[SshdHardenWorker] = []
@@ -565,7 +580,8 @@ class MainWindow(QMainWindow):
         self.list.itemDoubleClicked.connect(self._connect_item)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._profile_menu)
-        hint = QLabel("ダブルクリックで接続\n右クリックで編集/削除")
+        hint = QLabel("ダブルクリックで接続 (Ctrl+ダブルクリックで新ウィンドウ)\n"
+                      "右クリックで編集/削除")
         hint.setStyleSheet("color:#8a919e;")
         sv.addWidget(btn_new)
         sv.addWidget(self.list, 1)
@@ -881,11 +897,14 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu(self)
         a_conn = menu.addAction("接続")
+        a_conn_win = menu.addAction("新しいウィンドウで接続")
         a_edit = menu.addAction("編集…")
         a_del = menu.addAction("削除")
         chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
         if chosen is a_conn:
             self._connect_profile(self.store.profiles[row])
+        elif chosen is a_conn_win:
+            self._connect_in_new_window(self.store.profiles[row])
         elif chosen is a_edit:
             dlg = ConnectDialog(
                 self, self.store.profiles[row], self.credentials)
@@ -907,7 +926,18 @@ class MainWindow(QMainWindow):
     def _connect_item(self, item: QListWidgetItem):
         row = self.list.row(item)
         if 0 <= row < len(self.store.profiles):
-            self._connect_profile(self.store.profiles[row])
+            profile = self.store.profiles[row]
+            # Ctrl+ダブルクリックは新しいウィンドウで開く(Issue #14 段階1)
+            if QApplication.keyboardModifiers() & Qt.ControlModifier:
+                self._connect_in_new_window(profile)
+            else:
+                self._connect_profile(profile)
+
+    def _connect_in_new_window(self, profile: Profile):
+        """ストアを共有した新しいウィンドウを開き、そこで接続する。"""
+        win = MainWindow(services=self._services)
+        win.show()
+        win._connect_profile(profile)
 
     # ---- 接続 --------------------------------------------------------------
     def _connect_profile(self, profile: Profile):
@@ -1002,4 +1032,6 @@ class MainWindow(QMainWindow):
             w = self.tabs.widget(i)
             if isinstance(w, SessionTab):
                 w.shutdown()
+        if self in MainWindow._windows:
+            MainWindow._windows.remove(self)
         ev.accept()
