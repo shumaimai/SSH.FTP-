@@ -117,6 +117,7 @@ class Settings:
         "editor_font_size": 12,
         "editor_tab_width": 4,
         "open_text_in_editor": True,    # テキストは内蔵エディタで開く
+        "external_autoupload": True,    # 関連付けアプリで開いたファイルの変更を自動アップロード
     }
 
     def __init__(self, path: Path | None = None):

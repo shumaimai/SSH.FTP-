@@ -139,3 +139,86 @@ def test_external_save_uses_permission_override(qapp, tmp_path):
     assert worker.pm.paths == [remote]
     assert worker.sftp.calls == 2
     assert results == [(remote, str(local), True, "")]
+
+
+def _make_bare_browser(qapp):
+    from PySide6.QtWidgets import QWidget
+
+    from hashi.filebrowser import SftpBrowser
+
+    class FakeMonitor:
+        def __init__(self):
+            self.watched = []
+            self.unwatched = []
+
+        def watch(self, remote, local):
+            self.watched.append((remote, local))
+
+        def unwatch(self, local):
+            self.unwatched.append(local)
+
+    browser = SftpBrowser.__new__(SftpBrowser)
+    QWidget.__init__(browser)
+    browser._external_monitor = FakeMonitor()
+    browser._statuses = []
+    browser._on_status = browser._statuses.append
+    return browser
+
+
+class _FakeSettings:
+    def __init__(self, enabled):
+        self.enabled = enabled
+
+    def get(self, key):
+        assert key == "external_autoupload"
+        return self.enabled
+
+
+def test_opened_temp_watches_when_autoupload_on(qapp, monkeypatch):
+    from hashi import filebrowser
+
+    monkeypatch.setattr(
+        filebrowser.QDesktopServices, "openUrl", staticmethod(lambda url: True))
+    browser = _make_bare_browser(qapp)
+    browser.settings = _FakeSettings(True)
+
+    browser._on_opened_temp("/srv/a.bin", "/tmp/a.bin")
+
+    assert browser._external_monitor.watched == [("/srv/a.bin", "/tmp/a.bin")]
+    assert "変更は自動保存" in browser._statuses[-1]
+    browser.deleteLater()
+
+
+def test_opened_temp_skips_watch_when_autoupload_off(qapp, monkeypatch):
+    from hashi import filebrowser
+
+    monkeypatch.setattr(
+        filebrowser.QDesktopServices, "openUrl", staticmethod(lambda url: True))
+    browser = _make_bare_browser(qapp)
+    browser.settings = _FakeSettings(False)
+
+    browser._on_opened_temp("/srv/b.bin", "/tmp/b.bin")
+
+    assert browser._external_monitor.watched == []
+    assert "自動保存オフ" in browser._statuses[-1]
+    browser.deleteLater()
+
+
+def test_opened_temp_unwatches_when_open_fails(qapp, monkeypatch):
+    from hashi import filebrowser
+
+    monkeypatch.setattr(
+        filebrowser.QDesktopServices, "openUrl", staticmethod(lambda url: False))
+    warnings = []
+    monkeypatch.setattr(
+        filebrowser.QMessageBox, "warning",
+        staticmethod(lambda *args, **kwargs: warnings.append(args)))
+    browser = _make_bare_browser(qapp)
+    browser.settings = None  # settings なしは自動アップロード有効扱い
+
+    browser._on_opened_temp("/srv/c.bin", "/tmp/c.bin")
+
+    assert browser._external_monitor.watched == [("/srv/c.bin", "/tmp/c.bin")]
+    assert browser._external_monitor.unwatched == ["/tmp/c.bin"]
+    assert warnings
+    browser.deleteLater()

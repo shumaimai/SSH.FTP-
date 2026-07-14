@@ -1169,15 +1169,22 @@ class SftpBrowser(QWidget):
             if w is win:
                 del self._editors[remote]
 
+    def _external_autoupload_enabled(self) -> bool:
+        return self.settings is None or bool(self.settings.get("external_autoupload"))
+
     def _on_opened_temp(self, remote: str, local: str):
-        self._external_monitor.watch(remote, local)
+        autoupload = self._external_autoupload_enabled()
+        if autoupload:
+            self._external_monitor.watch(remote, local)
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(local)):
-            self._external_monitor.unwatch(local)
+            if autoupload:
+                self._external_monitor.unwatch(local)
             QMessageBox.warning(
                 self, "関連付けアプリ", f"ファイルを開けませんでした:\n{local}")
             return
+        suffix = "変更は自動保存" if autoupload else "自動保存オフ: 変更はローカルのみ"
         self._on_status(
-            f"関連付けアプリで開きました (変更は自動保存): {os.path.basename(local)}")
+            f"関連付けアプリで開きました ({suffix}): {os.path.basename(local)}")
 
     def _save_external_file(self, remote: str, local: str):
         self._on_status(f"変更を検出しました。アップロード中: {posixpath.basename(remote)}")
