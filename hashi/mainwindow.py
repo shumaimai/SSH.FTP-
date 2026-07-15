@@ -344,15 +344,18 @@ class NetAdminWorker(QThread):
         """確定後の後片付け: 新 IP 側の接続から残留アドレスを掃除する。
 
         旧 IP はここで剥がれる(=旧 IP 経由のセッションは切れる)。
+        新 IP への接続が張れないときは、旧 IP 経由の現在の接続から
+        遅延ジョブで削除を仕掛ける(Issue #71 のフォールバック)。
         """
+        iface = self.settings["iface"]
+        cidr = self.settings["address_cidr"]
         sess = self._connect_new(new_ip)
         if sess is None:
-            logger.warning("掃除用の新 IP 接続に失敗(残留アドレスは未掃除)")
-            return []
+            logger.warning("掃除用の新 IP 接続に失敗。旧接続からの遅延掃除に切替")
+            return netadmin.schedule_stale_cleanup(self.session, iface, cidr)
         try:
             sess._hashi_sudo_pw = self.sudo_pw
-            return netadmin.cleanup_addresses(
-                sess, self.settings["iface"], self.settings["address_cidr"])
+            return netadmin.cleanup_addresses(sess, iface, cidr)
         finally:
             sess.close()
 
@@ -1458,10 +1461,14 @@ class SessionWindow(_SharedOps, QMainWindow):
         if not dlg.exec():
             return
         cfg = dlg.result_settings()
+        replace_note = ("<br>⚠ 前回 Hashi が固定した設定(90-hashi.yaml)が"
+                        "見つかりました。<b>今回の内容で置き換えます</b>。"
+                        if netadmin.dropin_exists(session) else "")
         if not DoubleCheckDialog.confirm(
                 self, "サーバーの IP 固定",
                 f"インターフェース <b>{cfg['iface']}</b> を "
-                f"<b>{cfg['address_cidr']}</b> に固定します。<br>"
+                f"<b>{cfg['address_cidr']}</b> に固定します。"
+                + replace_note + "<br>"
                 "誤ると SSH に接続できなくなる可能性があります"
                 f"(適用前にバックアップし、{cfg['rollback_sec']} 秒以内に新しい IP へ"
                 "疎通できなければ自動で元へ戻します)。<br>"
@@ -1487,8 +1494,10 @@ class SessionWindow(_SharedOps, QMainWindow):
         updated = self._update_profile_host(new_ip) if new_ip else False
         cleaned = res.get("cleaned") or []
         cleaned_note = (f"残留アドレスを掃除: {', '.join(cleaned)}\n" if cleaned
-                        else "残留アドレスの掃除は行われませんでした"
-                             "(旧 IP が残る場合は再起動で消えます)。\n")
+                        else "残留アドレスの掃除は行われませんでした。"
+                             "旧 IP が残っている場合は再起動するか、"
+                             f"sudo ip addr del <旧IP/プレフィックス> dev "
+                             f"{res.get('iface', '<iface>')} で削除してください。\n")
         profile_note = (f"接続プロファイルの IP を {new_ip} に自動更新しました。\n"
                         if updated else
                         "接続プロファイルは見つからなかったため未更新です。\n")

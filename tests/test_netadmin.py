@@ -134,7 +134,7 @@ def test_happy_path_sequence_and_disarm():
     assert res["confirmed"] is True
     assert "192.168.1.10/24" in sess.dropin_content()
     # 順序: バックアップ → install → generate → arm(touch 番兵) → apply → disarm
-    i_backup = sess.idx("tar czf /tmp/hashi-netplan-backup")
+    i_backup = sess.idx("-czf /tmp/hashi-netplan-backup")
     i_install = sess.idx("install -o root")
     i_gen = sess.idx_exact("netplan generate")
     i_arm = sess.idx(f"touch {netadmin.SENTINEL}")
@@ -256,3 +256,43 @@ def test_consume_rollback_marker():
     assert netadmin.consume_rollback_marker(sess) is True
     sess.responses[key] = (1, "", "")
     assert netadmin.consume_rollback_marker(sess) is False
+
+
+def test_backup_excludes_hashi_dropin():
+    """バックアップに前回のドロップインを含めない (#71)。含めるとロールバックで
+    「元の設定」ではなく前回の静的 IP が復元され、二重 IP になる。"""
+    sess = FakeSession()
+    apply_static_ip(sess, iface="eth0", address_cidr="192.168.1.10/24",
+                    verify_reachable=lambda ip: True)
+    backup_cmds = [c for c in sess.calls if "-czf /tmp/hashi-netplan-backup" in c]
+    assert backup_cmds
+    assert "--exclude=./90-hashi.yaml" in backup_cmds[0]
+
+
+def test_apply_reports_replaced_previous():
+    """再実行(既存ドロップインあり)を結果で報告する (#71)。"""
+    sess = FakeSession()   # フェイクは test -f に rc=0 を返す = 既存あり
+    res = apply_static_ip(sess, iface="eth0", address_cidr="192.168.1.10/24",
+                          verify_reachable=lambda ip: True)
+    assert res["replaced_previous"] is True
+
+    sess2 = FakeSession()
+    sess2.responses[f"test -f {netadmin.DROPIN_PATH}"] = (1, "", "")
+    res2 = apply_static_ip(sess2, iface="eth0", address_cidr="192.168.1.10/24",
+                           verify_reachable=lambda ip: True)
+    assert res2["replaced_previous"] is False
+
+
+def test_schedule_stale_cleanup_arms_detached_job():
+    """新 IP 接続が張れないときの遅延掃除 (#71): 旧接続から nohup で仕掛ける。"""
+    sess = FakeSession()   # eth0 に 192.168.1.50/24 が載っている想定
+    stale = netadmin.schedule_stale_cleanup(sess, "eth0", "192.168.1.10/24")
+    assert stale == ["192.168.1.50/24"]
+    armed = [c for c in sess.calls if "nohup" in c and "ip addr del" in c]
+    assert armed and "ip addr del 192.168.1.50/24 dev eth0" in armed[0]
+    assert "sleep 2" in armed[0]
+    # keep 対象しか無ければ何も仕掛けない
+    sess2 = FakeSession()
+    assert netadmin.schedule_stale_cleanup(
+        sess2, "eth0", "192.168.1.50/24") == []
+    assert not any("nohup" in c and "ip addr del" in c for c in sess2.calls)

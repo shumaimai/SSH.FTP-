@@ -115,13 +115,57 @@ def build_netplan_yaml(iface: str, address_cidr: str, gateway: str = "",
 
 
 def _backup(session) -> str:
+    """netplan 設定をバックアップする。
+
+    **Hashi 自身のドロップインは除外する**(Issue #71)。含めてしまうと、
+    2 回目の実行でロールバックしたとき「元の設定」ではなく「前回 Hashi が
+    固定した静的 IP」が復元されて二重 IP の原因になる(実機で発生)。
+    """
     ts = time.strftime("%Y%m%d-%H%M%S")
     dest = f"/tmp/hashi-netplan-backup-{ts}.tgz"
+    dropin_name = posixpath.basename(DROPIN_PATH)
     rc, _out, err = session.run_sudo(
-        f"tar czf {dest} -C {NETPLAN_DIR} .", _sudo_pw(session))
+        f"tar --exclude=./{dropin_name} -czf {dest} -C {NETPLAN_DIR} .",
+        _sudo_pw(session))
     if rc != 0:
         raise NetAdminError(f"netplan 設定のバックアップに失敗しました: {err.strip()}")
     return dest
+
+
+def dropin_exists(session) -> bool:
+    """Hashi のドロップインが既にあるか(=再実行かどうか、Issue #71)。"""
+    rc, _out, _err = session.exec_command(f"test -f {DROPIN_PATH}")
+    return rc == 0
+
+
+def schedule_stale_cleanup(session, iface: str, keep_cidr: str) -> list[str]:
+    """旧アドレスの削除を**遅延ジョブとして**仕掛ける(Issue #71 フォールバック)。
+
+    新 IP 側の接続が張れず cleanup_addresses が使えないとき、旧 IP 経由の
+    現在の接続から使う。自分の足場(旧 IP)を消すとこの接続は切れるため、
+    nohup + sleep で切り離してから削除させる(コマンド自体はサーバー側で
+    実行が続く)。戻り値は削除を仕掛けたアドレスの一覧。
+    """
+    rc, out, err = session.exec_command(f"ip -o -4 addr show dev {iface}")
+    if rc != 0:
+        raise NetAdminError(f"アドレス一覧を取得できません: {err.strip()}")
+    keep = str(ipaddress.ip_interface(keep_cidr).ip)
+    stale = []
+    for line in out.splitlines():
+        parts = line.split()
+        if "inet" not in parts or "host" in parts:
+            continue
+        cidr = parts[parts.index("inet") + 1]
+        if str(ipaddress.ip_interface(cidr).ip) != keep:
+            stale.append(cidr)
+    if not stale:
+        return []
+    dels = "; ".join(f"ip addr del {c} dev {iface}" for c in stale)
+    script = f"nohup sh -c 'sleep 2; {dels}' >/dev/null 2>&1 &"
+    rc, _out, err = session.run_sudo(f"sh -c {_shq(script)}", _sudo_pw(session))
+    if rc != 0:
+        raise NetAdminError(f"残留アドレスの削除を仕掛けられません: {err.strip()}")
+    return stale
 
 
 def _write_dropin(session, content: str) -> None:
@@ -297,6 +341,7 @@ def apply_static_ip(session, *, iface: str, address_cidr: str,
             f"(netplan コマンドまたは {NETPLAN_DIR}/*.yaml が見つからない)。"
             "安全に自動編集できないため中止しました。")
 
+    replaced_previous = dropin_exists(session)
     backup = _backup(session)
     content = build_netplan_yaml(iface, address_cidr, gateway, nameservers)
     _write_dropin(session, content)
@@ -330,4 +375,5 @@ def apply_static_ip(session, *, iface: str, address_cidr: str,
         except Exception:  # noqa: BLE001 掃除の失敗で適用成功を覆さない
             logger.warning("確定後の残留アドレス掃除に失敗", exc_info=True)
     return {"backup": backup, "dropin": DROPIN_PATH, "confirmed": confirmed,
-            "new_ip": new_ip, "iface": iface, "cleaned": cleaned}
+            "new_ip": new_ip, "iface": iface, "cleaned": cleaned,
+            "replaced_previous": replaced_previous}
