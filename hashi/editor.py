@@ -76,15 +76,22 @@ _SH_KW = (
 def _lang_for(path: str) -> str:
     ext = os.path.splitext(path)[1].lower().lstrip(".")
     name = os.path.basename(path).lower()
+    if not ext and name.startswith("."):
+        ext = name.lstrip(".")   # .editorconfig / .gitignore などのドットファイル
     if ext in ("py", "pyw"):
         return "python"
-    if ext in ("c", "h", "cpp", "cc", "hpp", "cxx", "java", "cs", "go", "rs"):
+    # Kotlin/Scala/Swift/Dart は C 系のコメント・文字列規則で十分読める(#64)
+    if ext in ("c", "h", "cpp", "cc", "hpp", "cxx", "java", "cs", "go", "rs",
+               "kt", "kts", "scala", "swift", "dart"):
         return "c"
-    if ext in ("js", "jsx", "ts", "tsx", "json"):
+    if ext in ("js", "jsx", "ts", "tsx", "json", "vue", "svelte"):
         return "js"
-    if ext in ("sh", "bash", "zsh") or name in ("bashrc", ".bashrc", "profile"):
+    # R / Julia / PowerShell は # コメント + 引用符文字列でシェル規則が近い(#64)
+    if ext in ("sh", "bash", "zsh", "ps1", "psm1", "r", "jl") or name in (
+            "bashrc", ".bashrc", "profile"):
         return "shell"
-    if ext in ("yml", "yaml", "conf", "cfg", "ini", "toml"):
+    if ext in ("yml", "yaml", "conf", "cfg", "ini", "toml", "env",
+               "properties", "desktop", "service", "editorconfig"):
         return "conf"
     return "plain"
 

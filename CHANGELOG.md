@@ -3,6 +3,16 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+### 追加
+- **SFTP ブラウザの「新規ファイル」(Issue #64)**。右クリックメニューから名前
+  (拡張子込み)を入力して空のリモートファイルを作成できる。既存名は拒否
+  (`O_EXCL` 作成)。作成後は一覧を自動更新。
+- **エディタ / テキスト判定の対応拡張子を拡充(Issue #64)**。Kotlin / Scala /
+  Swift / Dart / Lua / R / Julia / Elixir / Haskell / Vue / Svelte / PowerShell /
+  bat / TeX / reST / AsciiDoc / gradle / cmake / systemd ユニット / dotfile 類
+  などをテキストとして内蔵エディタで開けるようにし、近い言語のハイライト規則を
+  割り当て。`.editorconfig` などのドットファイルも拡張子として判定。
+
 ### 修正
 - **Windows 11 でウィンドウのタイトルバーが画面上端の外へ突き出し、移動できない
   ことがあるバグ(Issue #63)**。ランチャー / セッションウィンドウ / エディタの
