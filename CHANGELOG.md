@@ -3,6 +3,8 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+
+## [0.5.0] - 2026-07-15
 ### 追加
 - **SFTP ブラウザの「新規ファイル」(Issue #64)**。右クリックメニューから名前
   (拡張子込み)を入力して空のリモートファイルを作成できる。既存名は拒否
@@ -193,7 +195,8 @@
 - 削除・上書きの 2 段階確認。
 - CLI 接続診断ツール `tools/doctor.py`。
 
-[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/shumaimai/Free-SSH_FTP/releases/tag/v0.2.0
