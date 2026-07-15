@@ -318,18 +318,42 @@ class NetAdminWorker(QThread):
 
         return _Ui()
 
-    def _verify_reachable(self, new_ip) -> bool:
+    def _connect_new(self, new_ip):
+        """新 IP へ別接続を張って返す(失敗時 None)。"""
         from dataclasses import replace
         p = replace(self.profile, host=new_ip)
         sess = SshSession(p, self.known_hosts)
         try:
             sess.connect(self._verify_ui())
-            ok = sess.is_alive()
+            if sess.is_alive():
+                return sess
             sess.close()
-            return ok
         except Exception:
-            logger.info("新 IP %s への疎通確認に失敗", new_ip, exc_info=True)
+            logger.info("新 IP %s への接続に失敗", new_ip, exc_info=True)
+        return None
+
+    def _verify_reachable(self, new_ip) -> bool:
+        sess = self._connect_new(new_ip)
+        if sess is None:
             return False
+        sess.close()
+        return True
+
+    def _post_confirm(self, new_ip) -> list:
+        """確定後の後片付け: 新 IP 側の接続から残留アドレスを掃除する。
+
+        旧 IP はここで剥がれる(=旧 IP 経由のセッションは切れる)。
+        """
+        sess = self._connect_new(new_ip)
+        if sess is None:
+            logger.warning("掃除用の新 IP 接続に失敗(残留アドレスは未掃除)")
+            return []
+        try:
+            sess._hashi_sudo_pw = self.sudo_pw
+            return netadmin.cleanup_addresses(
+                sess, self.settings["iface"], self.settings["address_cidr"])
+        finally:
+            sess.close()
 
     def run(self):
         try:
@@ -342,6 +366,7 @@ class NetAdminWorker(QThread):
                 nameservers=self.settings["nameservers"],
                 rollback_sec=self.settings["rollback_sec"],
                 verify_reachable=self._verify_reachable,
+                post_confirm=self._post_confirm,
             )
             self.ok.emit(res)
         except netadmin.NetAdminError as e:
@@ -1404,12 +1429,20 @@ class SessionWindow(_SharedOps, QMainWindow):
                 "この環境は netplan(Ubuntu Server)で管理されていません。"
                 "安全に自動編集できないため中止しました。")
             return
+        if netadmin.consume_rollback_marker(session):
+            QMessageBox.information(
+                self, "IP 固定",
+                "前回の IP 固定は確定されず、自動ロールバックで元の設定に"
+                "戻っています(インターフェースに旧 IP が残って見える場合は"
+                "再起動で消えます)。")
         try:
             interfaces = netadmin.list_interfaces(session)
         except netadmin.NetAdminError as e:
             QMessageBox.warning(self, "IP 固定", str(e))
             return
-        dlg = NetAdminDialog(self, interfaces=interfaces)
+        gateway = netadmin.current_gateway(session)
+        dlg = NetAdminDialog(self, interfaces=interfaces,
+                             default_gateway=gateway, default_dns="1.1.1.1")
         if not dlg.exec():
             return
         cfg = dlg.result_settings()
@@ -1419,7 +1452,9 @@ class SessionWindow(_SharedOps, QMainWindow):
                 f"<b>{cfg['address_cidr']}</b> に固定します。<br>"
                 "誤ると SSH に接続できなくなる可能性があります"
                 f"(適用前にバックアップし、{cfg['rollback_sec']} 秒以内に新しい IP へ"
-                "疎通できなければ自動で元へ戻します)。",
+                "疎通できなければ自動で元へ戻します)。<br>"
+                "成功すると接続プロファイルの IP を自動更新し、"
+                "この接続(旧 IP)は切断されます。",
                 "change", "適用"):
             return
         sudo_pw = tab.secret_ctx.get_sudo_password()
@@ -1436,13 +1471,53 @@ class SessionWindow(_SharedOps, QMainWindow):
 
     def _on_static_ip_ok(self, res: dict):
         self.statusBar().showMessage("サーバーの IP を固定しました", 5000)
+        new_ip = res.get("new_ip", "")
+        updated = self._update_profile_host(new_ip) if new_ip else False
+        cleaned = res.get("cleaned") or []
+        cleaned_note = (f"残留アドレスを掃除: {', '.join(cleaned)}\n" if cleaned
+                        else "残留アドレスの掃除は行われませんでした"
+                             "(旧 IP が残る場合は再起動で消えます)。\n")
+        profile_note = (f"接続プロファイルの IP を {new_ip} に自動更新しました。\n"
+                        if updated else
+                        "接続プロファイルは見つからなかったため未更新です。\n")
         QMessageBox.information(
             self, "IP 固定",
             "IP を固定しました。\n"
             f"バックアップ: {res.get('backup')}\n"
-            f"適用ファイル: {res.get('dropin')}\n\n"
-            "この接続のプロファイルのホストも新しい IP に更新すると、"
-            "次回から新しい IP で接続できます。")
+            f"適用ファイル: {res.get('dropin')}\n"
+            + cleaned_note + profile_note +
+            "\n旧 IP のこの接続は切断されるため、ウィンドウを閉じます。"
+            "サーバー一覧から新しい IP で再接続してください。")
+        self._close_sessions_for_profile()
+
+    def _update_profile_host(self, new_ip: str) -> bool:
+        """保存済みプロファイルのホストを新 IP に書き換える(#61)。"""
+        tab = self.session_tab
+        if not tab:
+            return False
+        old_id = tab.session.profile.id_str()
+        updated = False
+        for p in self.store.profiles:
+            if p.id_str() == old_id:
+                p.host = new_ip
+                updated = True
+        if updated:
+            self.store.save()
+        return updated
+
+    def _close_sessions_for_profile(self):
+        """同じプロファイル(旧 IP)で開いている全セッションウィンドウを閉じる。"""
+        tab = self.session_tab
+        if not tab:
+            self.close()
+            return
+        old_id = tab.session.profile.id_str()
+        for win in list(SessionWindow._windows):
+            wtab = win.session_tab
+            if wtab and wtab.session.profile.id_str() == old_id:
+                win.close()
+        if self in SessionWindow._windows:
+            self.close()
 
     def closeEvent(self, ev):
         tab = self.session_tab

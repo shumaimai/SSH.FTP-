@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 NETPLAN_DIR = "/etc/netplan"
 DROPIN_PATH = f"{NETPLAN_DIR}/90-hashi.yaml"
 SENTINEL = "/tmp/hashi-netplan-armed"
-DEFAULT_ROLLBACK_SEC = 120
+ROLLBACK_MARKER = "/tmp/hashi-netplan-rolledback"
+DEFAULT_ROLLBACK_SEC = 20
 
 
 class NetAdminError(Exception):
@@ -163,14 +164,35 @@ def _generate(session) -> None:
             f"{err.strip()}")
 
 
-def _arm_rollback(session, backup: str, timeout: int) -> None:
-    """番兵を作り、timeout 後に番兵が残っていれば元へ戻す nohup ジョブを起動。"""
+def _restore_script(backup: str, iface: str = "", address_cidr: str = "") -> str:
+    """元設定へ戻す共通シェル断片。
+
+    netplan apply は「いま設定した静的アドレス」を剥がしてくれない(実機で確認、
+    Issue #61)ので、復元後に ip addr del で残留アドレスを明示的に消す。
+    さらにロールバックが起きたことを ROLLBACK_MARKER に残し、GUI が次回
+    「確定されず元へ戻った」ことをユーザーへ伝えられるようにする。
+    """
+    parts = [f"rm -f {DROPIN_PATH}", f"tar xzf {backup} -C {NETPLAN_DIR}",
+             "netplan apply"]
+    if iface and address_cidr:
+        parts.append(f"ip addr del {address_cidr} dev {iface} 2>/dev/null || true")
+    parts.append(f"touch {ROLLBACK_MARKER}")
+    parts.append(f"rm -f {SENTINEL}")
+    return "; ".join(parts)
+
+
+def _arm_rollback(session, backup: str, timeout: int,
+                  iface: str = "", address_cidr: str = "") -> None:
+    """番兵を作り、timeout 後に番兵が残っていれば元へ戻す nohup ジョブを起動。
+
+    「20 秒以内に確定(disarm)がなければ元へ戻す」指示を、緩める前に
+    サーバー側へ書き込んでから適用する(permjournal と同じ順序思想)。
+    """
+    restore = _restore_script(backup, iface, address_cidr)
     script = (
         f"touch {SENTINEL}; "
         f"nohup sh -c 'sleep {timeout}; "
-        f"if [ -f {SENTINEL} ]; then "
-        f"rm -f {DROPIN_PATH}; tar xzf {backup} -C {NETPLAN_DIR}; "
-        f"netplan apply; rm -f {SENTINEL}; fi' >/dev/null 2>&1 &"
+        f"if [ -f {SENTINEL} ]; then {restore}; fi' >/dev/null 2>&1 &"
     )
     rc, _out, err = session.run_sudo(f"sh -c {_shq(script)}", _sudo_pw(session))
     if rc != 0:
@@ -178,15 +200,71 @@ def _arm_rollback(session, backup: str, timeout: int) -> None:
             f"自動ロールバックの仕掛けに失敗しました(適用を中止): {err.strip()}")
 
 
-def _disarm(session) -> None:
-    """確定: 番兵を消す(ロールバックジョブは sleep 明けに何もせず終わる)。"""
-    session.run_sudo(f"rm -f {SENTINEL}", _sudo_pw(session))
+def _disarm(session) -> bool:
+    """確定: 番兵を消す。
 
-
-def _rollback_now(session, backup: str) -> None:
-    session.run_sudo(
-        f"sh -c {_shq(f'rm -f {DROPIN_PATH}; tar xzf {backup} -C {NETPLAN_DIR}; netplan apply; rm -f {SENTINEL}')}",
+    番兵が既に無い(=タイマーが発火してロールバック済み)なら False を返す。
+    確定とタイマー発火の競合を成功と誤認しないためのチェック。
+    """
+    rc, _out, _err = session.run_sudo(
+        f"sh -c {_shq(f'test -f {SENTINEL} && rm -f {SENTINEL}')}",
         _sudo_pw(session))
+    return rc == 0
+
+
+def _rollback_now(session, backup: str,
+                  iface: str = "", address_cidr: str = "") -> None:
+    session.run_sudo(
+        f"sh -c {_shq(_restore_script(backup, iface, address_cidr))}",
+        _sudo_pw(session))
+
+
+def consume_rollback_marker(session) -> bool:
+    """前回のロールバック痕跡があれば消して True(GUI が通知に使う)。"""
+    rc, _out, _err = session.run_sudo(
+        f"sh -c {_shq(f'test -f {ROLLBACK_MARKER} && rm -f {ROLLBACK_MARKER}')}",
+        _sudo_pw(session))
+    return rc == 0
+
+
+def current_gateway(session, iface: str = "") -> str:
+    """デフォルトルートのゲートウェイを返す(無ければ空)。GUI の引き継ぎ用。"""
+    dev = f" dev {iface}" if iface else ""
+    rc, out, _err = session.exec_command(f"ip -4 route show default{dev}")
+    if rc != 0:
+        return ""
+    for line in out.splitlines():
+        parts = line.split()
+        if "via" in parts:
+            return parts[parts.index("via") + 1]
+    return ""
+
+
+def cleanup_addresses(session, iface: str, keep_cidr: str) -> list[str]:
+    """iface 上の IPv4 アドレスを keep_cidr 以外すべて削除する(残留 IP の掃除)。
+
+    確定後に「新しい IP だけが載っている」状態にするための処理。旧 IP 経由の
+    接続はここで切れるので、必ず**新 IP で張った接続**から呼ぶこと。
+    """
+    rc, out, err = session.exec_command(f"ip -o -4 addr show dev {iface}")
+    if rc != 0:
+        raise NetAdminError(f"アドレス一覧を取得できません: {err.strip()}")
+    keep = str(ipaddress.ip_interface(keep_cidr).ip)
+    removed = []
+    for line in out.splitlines():
+        parts = line.split()
+        if "inet" not in parts or "host" in parts:
+            continue  # ループバック(scope host)は絶対に触らない
+        cidr = parts[parts.index("inet") + 1]
+        if str(ipaddress.ip_interface(cidr).ip) == keep:
+            continue
+        rc, _out, err = session.run_sudo(
+            f"ip addr del {cidr} dev {iface}", _sudo_pw(session))
+        if rc == 0:
+            removed.append(cidr)
+        else:
+            logger.warning("残留アドレス %s の削除に失敗: %s", cidr, err.strip())
+    return removed
 
 
 def _remove_dropin(session) -> None:
@@ -200,13 +278,17 @@ def _shq(s: str) -> str:
 
 def apply_static_ip(session, *, iface: str, address_cidr: str,
                     gateway: str = "", nameservers=None,
-                    verify_reachable=None,
+                    verify_reachable=None, post_confirm=None,
                     rollback_sec: int = DEFAULT_ROLLBACK_SEC) -> dict:
     """静的 IP を安全に適用する(netplan 限定 + 自動ロールバック)。
 
     verify_reachable(new_ip) は「新しい IP へ別接続して疎通するか」を返すコールバック。
     None のときは疎通確認をスキップ(自動ロールバックのタイマー任せ)。
-    returns {"backup": path, "dropin": path, "confirmed": bool}。
+    post_confirm(new_ip) は確定(disarm)後に呼ばれる後片付けフック。旧 IP の
+    残留アドレス掃除(cleanup_addresses)に使う。旧 IP 経由の接続を切る操作を
+    含むため、確定の前ではなく**後**に、新 IP 側の接続で行うこと。失敗しても
+    適用自体は成功として扱う(戻り値 "cleaned" に結果を入れる)。
+    returns {"backup", "dropin", "confirmed", "new_ip", "iface", "cleaned"}。
     """
     _validate(address_cidr, gateway, nameservers)
     if not detect_netplan(session):
@@ -219,21 +301,33 @@ def apply_static_ip(session, *, iface: str, address_cidr: str,
     content = build_netplan_yaml(iface, address_cidr, gateway, nameservers)
     _write_dropin(session, content)
     _generate(session)                       # 構文 NG ならここで中止(dropin 削除済み)
-    _arm_rollback(session, backup, rollback_sec)
+    _arm_rollback(session, backup, rollback_sec, iface, address_cidr)
 
     rc, _out, err = session.run_sudo("netplan apply", _sudo_pw(session))
     if rc != 0:
-        _rollback_now(session, backup)
+        _rollback_now(session, backup, iface, address_cidr)
         raise NetAdminError(f"netplan apply に失敗しました(元へ戻しました): {err.strip()}")
 
+    new_ip = str(ipaddress.ip_interface(address_cidr).ip)
     confirmed = True
     if verify_reachable is not None:
-        new_ip = str(ipaddress.ip_interface(address_cidr).ip)
         confirmed = bool(verify_reachable(new_ip))
         if not confirmed:
-            _rollback_now(session, backup)
+            _rollback_now(session, backup, iface, address_cidr)
             raise NetAdminError(
-                "新しい IP への疎通確認に失敗しました。設定を元に戻しました。\n"
+                "新しい IP への疎通確認に失敗しました。設定を元に戻しました"
+                f"(残っていても {rollback_sec} 秒で自動復帰します)。\n"
                 "アドレス/ゲートウェイ/経路の指定を確認してください。")
-    _disarm(session)
-    return {"backup": backup, "dropin": DROPIN_PATH, "confirmed": confirmed}
+    if not _disarm(session):
+        # 疎通確認より先にタイマーが発火 = すでに元へ戻っている
+        raise NetAdminError(
+            f"確定より先に自動ロールバック({rollback_sec} 秒)が作動したため、"
+            "設定は元に戻りました。ロールバック秒数を増やして再試行してください。")
+    cleaned = []
+    if post_confirm is not None:
+        try:
+            cleaned = post_confirm(new_ip) or []
+        except Exception:  # noqa: BLE001 掃除の失敗で適用成功を覆さない
+            logger.warning("確定後の残留アドレス掃除に失敗", exc_info=True)
+    return {"backup": backup, "dropin": DROPIN_PATH, "confirmed": confirmed,
+            "new_ip": new_ip, "iface": iface, "cleaned": cleaned}

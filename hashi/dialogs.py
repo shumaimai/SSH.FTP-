@@ -588,7 +588,8 @@ class NetAdminDialog(QDialog):
     """サーバーの静的 IP 設定(Issue #45、netplan 限定)。"""
 
     def __init__(self, parent=None, interfaces=None,
-                 default_rollback: int = 120):
+                 default_rollback: int = 20,
+                 default_gateway: str = "", default_dns: str = "1.1.1.1"):
         super().__init__(parent)
         self.setWindowTitle("サーバーの IP を固定 (netplan)")
         self.setModal(True)
@@ -603,13 +604,13 @@ class NetAdminDialog(QDialog):
 
         self.ed_address = QLineEdit()
         self.ed_address.setPlaceholderText("例: 192.168.1.50/24 (CIDR 表記)")
-        self.ed_gateway = QLineEdit()
+        self.ed_gateway = QLineEdit(default_gateway)
         self.ed_gateway.setPlaceholderText("例: 192.168.1.1 (任意)")
-        self.ed_dns = QLineEdit()
+        self.ed_dns = QLineEdit(default_dns)
         self.ed_dns.setPlaceholderText("例: 1.1.1.1, 8.8.8.8 (カンマ区切り・任意)")
 
         self.sp_rollback = QSpinBox()
-        self.sp_rollback.setRange(30, 600)
+        self.sp_rollback.setRange(10, 600)
         self.sp_rollback.setValue(default_rollback)
         self.sp_rollback.setSuffix(" 秒")
 

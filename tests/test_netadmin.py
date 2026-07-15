@@ -140,8 +140,9 @@ def test_happy_path_sequence_and_disarm():
     i_arm = sess.idx(f"touch {netadmin.SENTINEL}")
     i_apply = sess.idx_exact("netplan apply")
     i_disarm = max(i for i, c in enumerate(sess.calls)
-                   if c == f"rm -f {netadmin.SENTINEL}")
+                   if f"test -f {netadmin.SENTINEL} && rm -f {netadmin.SENTINEL}" in c)
     assert i_backup < i_install < i_gen < i_arm < i_apply < i_disarm
+    assert res["new_ip"] == "192.168.1.10"
 
 
 def test_generate_failure_aborts_and_removes_dropin():
@@ -160,7 +161,13 @@ def test_unreachable_rolls_back():
         apply_static_ip(sess, iface="eth0", address_cidr="192.168.1.10/24",
                         verify_reachable=lambda ip: False)
     # ロールバック(バックアップ復元)が呼ばれている
-    assert any("tar xzf /tmp/hashi-netplan-backup" in c for c in sess.calls)
+    rollback = [c for c in sess.calls
+                if "tar xzf /tmp/hashi-netplan-backup" in c
+                and f"touch {netadmin.SENTINEL}" not in c]
+    assert rollback
+    # 残留アドレスの削除と、ロールバック痕跡(マーカー)も含む (#61)
+    assert "ip addr del 192.168.1.10/24 dev eth0" in rollback[0]
+    assert f"touch {netadmin.ROLLBACK_MARKER}" in rollback[0]
 
 
 def test_apply_failure_rolls_back():
@@ -177,3 +184,75 @@ def test_arm_uses_sentinel_and_timeout():
                     verify_reachable=lambda ip: True, rollback_sec=90)
     armed = [c for c in sess.calls if "sleep 90" in c]
     assert armed and netadmin.SENTINEL in armed[0]
+    # 番兵ジョブにも残留アドレス削除とマーカーが入っている (#61)
+    assert "ip addr del 192.168.1.10/24 dev eth0" in armed[0]
+    assert f"touch {netadmin.ROLLBACK_MARKER}" in armed[0]
+
+
+def test_disarm_race_reports_rollback():
+    """確定より先に番兵が発火していたら成功と誤認しない (#61)。"""
+    sess = FakeSession()
+    sess.responses[
+        f"sh -c 'test -f {netadmin.SENTINEL} && rm -f {netadmin.SENTINEL}'"
+    ] = (1, "", "")
+    with pytest.raises(NetAdminError, match="自動ロールバック"):
+        apply_static_ip(sess, iface="eth0", address_cidr="192.168.1.10/24",
+                        verify_reachable=lambda ip: True)
+
+
+def test_post_confirm_cleanup_result_and_isolation():
+    """post_confirm は確定後に呼ばれ、失敗しても適用成功を覆さない (#61)。"""
+    sess = FakeSession()
+    res = apply_static_ip(
+        sess, iface="eth0", address_cidr="192.168.1.10/24",
+        verify_reachable=lambda ip: True,
+        post_confirm=lambda ip: [f"cleaned-for-{ip}"])
+    assert res["cleaned"] == ["cleaned-for-192.168.1.10"]
+
+    def boom(_ip):
+        raise RuntimeError("cleanup failed")
+
+    sess2 = FakeSession()
+    res2 = apply_static_ip(
+        sess2, iface="eth0", address_cidr="192.168.1.10/24",
+        verify_reachable=lambda ip: True, post_confirm=boom)
+    assert res2["confirmed"] is True
+    assert res2["cleaned"] == []
+
+
+def test_cleanup_addresses_removes_all_but_keep():
+    # FakeSession の既定出力: lo(scope host)と eth0 192.168.1.50/24
+    sess = FakeSession()
+    removed = netadmin.cleanup_addresses(sess, "eth0", "192.168.1.10/24")
+    assert removed == ["192.168.1.50/24"]
+    assert sess.idx("ip addr del 192.168.1.50/24 dev eth0") >= 0
+    # ループバックと keep 対象は削除しない
+    assert sess.idx("ip addr del 127.0.0.1/8") == -1
+    assert sess.idx("ip addr del 192.168.1.10/24 dev eth0") == -1
+
+
+def test_cleanup_addresses_keeps_target_address():
+    sess = FakeSession()
+    removed = netadmin.cleanup_addresses(sess, "eth0", "192.168.1.50/24")
+    assert removed == []
+    assert sess.idx("ip addr del") == -1
+
+
+def test_current_gateway_parses_default_route():
+    sess = FakeSession()
+    sess.responses["ip -4 route show default"] = (
+        0, "default via 192.168.0.1 dev eth0 proto dhcp metric 100\n", "")
+    assert netadmin.current_gateway(sess) == "192.168.0.1"
+    sess2 = FakeSession()
+    sess2.responses["ip -4 route show default"] = (0, "", "")
+    assert netadmin.current_gateway(sess2) == ""
+
+
+def test_consume_rollback_marker():
+    sess = FakeSession()
+    key = (f"sh -c 'test -f {netadmin.ROLLBACK_MARKER} "
+           f"&& rm -f {netadmin.ROLLBACK_MARKER}'")
+    sess.responses[key] = (0, "", "")
+    assert netadmin.consume_rollback_marker(sess) is True
+    sess.responses[key] = (1, "", "")
+    assert netadmin.consume_rollback_marker(sess) is False

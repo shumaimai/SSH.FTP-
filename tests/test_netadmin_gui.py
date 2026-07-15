@@ -35,7 +35,20 @@ def test_netadmin_dialog_editable_iface(qapp):
     dlg.ed_address.setText("10.1.2.3/24")
     cfg = dlg.result_settings()
     assert cfg["iface"] == "ens3"
-    assert cfg["nameservers"] == []
+    # DNS は既定で 1.1.1.1 をプリフィル(#61)。消せば空にできる
+    assert cfg["nameservers"] == ["1.1.1.1"]
+    dlg.ed_dns.clear()
+    assert dlg.result_settings()["nameservers"] == []
+
+
+def test_netadmin_dialog_prefills_gateway_and_dns(qapp):
+    from hashi.dialogs import NetAdminDialog
+
+    dlg = NetAdminDialog(interfaces=[], default_gateway="192.168.0.1",
+                         default_dns="9.9.9.9")
+    assert dlg.ed_gateway.text() == "192.168.0.1"
+    assert dlg.ed_dns.text() == "9.9.9.9"
+    assert dlg.sp_rollback.value() == 20
 
 
 def test_netadmin_worker_calls_apply_with_settings(qapp, monkeypatch):
