@@ -391,11 +391,21 @@ class TerminalWidget(QWidget):
         cols, rows = self._pending_grid
         self._pending_grid = None
         if (cols, rows) != (self._cols, self._rows):
-            self._cols, self._rows = cols, rows
+            # 履歴スクロール中の pyte resize はカーソル/行の再配置が乱れる
+            # ことがあるので、必ず最下段へ戻してから適用する(Issue #72)
+            if self._is_scrolled():
+                self._scroll_to_bottom()
             try:
                 self.screen.resize(rows, cols)  # pyte は (lines, columns) の順
             except Exception:
-                logger.debug("screen.resize に失敗 (無視)", exc_info=True)
+                # スクリーンを変えられなかったのに描画グリッドや PTY だけ
+                # 新サイズにすると、シェル(新幅で折返す)と pyte(旧幅)が
+                # ずれて入力位置が乱れる(Issue #72)。何も変えずに揃える。
+                logger.warning("screen.resize に失敗 (グリッド/PTY を維持)",
+                               exc_info=True)
+                self._dirty = True
+                return
+            self._cols, self._rows = cols, rows
             if self._channel is not None and not self._closed:
                 try:
                     self._channel.resize_pty(width=cols, height=rows)
