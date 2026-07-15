@@ -3,6 +3,8 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+
+## [0.4.0] - 2026-07-15
 ### 追加
 - **外部アプリ自動アップロードのオン/オフ設定(Issue #54)**。「関連付けアプリで開く」で
   開いたファイルの変更を自動でリモートへ再アップロードする挙動(実装済み)を、設定ダイアログの
@@ -156,7 +158,8 @@
 - 削除・上書きの 2 段階確認。
 - CLI 接続診断ツール `tools/doctor.py`。
 
-[Unreleased]: https://github.com/shumaimai/SSH.FTP-/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/shumaimai/SSH.FTP-/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/shumaimai/SSH.FTP-/releases/tag/v0.2.0
-[0.1.0]: https://github.com/shumaimai/SSH.FTP-/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/shumaimai/Free-SSH_FTP/releases/tag/v0.2.0
+[0.1.0]: https://github.com/shumaimai/Free-SSH_FTP/releases/tag/v0.1.0
