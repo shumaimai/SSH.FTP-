@@ -763,6 +763,21 @@ class SshdHardenDialog(QDialog):
         self.setMinimumWidth(500)
 
         form = QFormLayout()
+
+        # 現在の実効状態を明示する(Issue #73)。sshd -T は Include /
+        # sshd_config.d / 設定の優先順を解決した実効値なので、上位設定の
+        # 見落としが起きない。ただし Match ブロック適用前のグローバル値。
+        ports_str = ", ".join(str(p) for p in (current_ports or [current_port]))
+        state = "有効" if password_enabled else "無効"
+        self.lbl_state = QLabel(
+            f"現在の状態: パスワード認証は <b>{state}</b> / "
+            f"待受ポート: <b>{ports_str}</b>"
+            "<br><span style='color:#888;'>(sshd -T の実効値。Include や "
+            "sshd_config.d を解決済み。Match ブロックで個別に上書きしている"
+            "構成では実挙動が異なる場合があります)</span>")
+        self.lbl_state.setWordWrap(True)
+        form.addRow(self.lbl_state)
+
         self.chk_disable_pw = QCheckBox(
             "パスワード認証を無効化する(鍵認証のみにする)")
         self.chk_disable_pw.setEnabled(password_enabled)

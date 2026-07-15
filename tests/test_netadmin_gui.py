@@ -181,3 +181,17 @@ def test_update_profile_fields_updates_matching_profile(qapp):
     saved_before = fake2.store.saved
     assert not SessionWindow._update_profile_fields(fake2, port=2222)
     assert fake2.store.saved == saved_before
+
+
+def test_sshd_dialog_shows_current_effective_state(qapp):
+    """現在の実効状態(パスワード認証・待受ポート)を明示する(#73)。"""
+    from hashi.dialogs import SshdHardenDialog
+
+    dlg = SshdHardenDialog(current_port=22, password_enabled=True,
+                           current_ports=[22, 2222])
+    assert "パスワード認証は <b>有効</b>" in dlg.lbl_state.text()
+    assert "22, 2222" in dlg.lbl_state.text()
+
+    dlg2 = SshdHardenDialog(current_port=22, password_enabled=False)
+    assert "パスワード認証は <b>無効</b>" in dlg2.lbl_state.text()
+    assert not dlg2.chk_disable_pw.isEnabled()
