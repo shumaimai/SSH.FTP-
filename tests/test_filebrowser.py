@@ -222,3 +222,54 @@ def test_opened_temp_unwatches_when_open_fails(qapp, monkeypatch):
     assert browser._external_monitor.unwatched == ["/tmp/c.bin"]
     assert warnings
     browser.deleteLater()
+
+
+def test_job_touch_creates_new_file_exclusively(qapp):
+    """新規ファイル作成(Issue #64): 空作成 + 既存名は拒否。"""
+    from hashi.filebrowser import SftpWorker
+
+    class FakeSftp:
+        def __init__(self, existing):
+            self.existing = set(existing)
+            self.opened = []
+
+        def stat(self, path):
+            if path not in self.existing:
+                raise IOError("no such file")
+
+        def open(self, path, mode):
+            assert mode == "wx"
+            self.opened.append(path)
+
+            class _F:
+                def close(self):
+                    pass
+            return _F()
+
+    worker = SftpWorker(object(), "test")
+    worker.sftp = FakeSftp(existing=[])
+    statuses = []
+    worker.status.connect(statuses.append)
+    done = []
+    worker.job_done.connect(done.append)
+
+    worker._job_touch({"path": "/srv/new.txt"})
+    assert worker.sftp.opened == ["/srv/new.txt"]
+    assert done == ["touch"]
+    assert any("作成しました" in s for s in statuses)
+
+    worker.sftp = FakeSftp(existing=["/srv/new.txt"])
+    import pytest
+    with pytest.raises(Exception, match="既に存在します"):
+        worker._job_touch({"path": "/srv/new.txt"})
+    assert worker.sftp.opened == []
+
+
+def test_looks_text_covers_expanded_extensions(qapp):
+    from hashi.filebrowser import SftpBrowser
+
+    for name in ("app.kt", "main.swift", "script.ps1", "note.rst",
+                 "conf.editorconfig", "Cargo.lock", "id_ed25519.pub"):
+        assert SftpBrowser._looks_text(name), name
+    assert not SftpBrowser._looks_text("photo.png")
+    assert not SftpBrowser._looks_text("archive.tar.gz")

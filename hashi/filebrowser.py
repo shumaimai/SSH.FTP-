@@ -58,9 +58,16 @@ EDIT_SIZE_LIMIT = 8 * 1024 * 1024  # 内蔵エディタで開く上限
 TEXT_EXTS = {
     "txt", "md", "markdown", "log", "conf", "cfg", "ini", "toml", "yaml", "yml",
     "json", "xml", "html", "htm", "css", "js", "jsx", "ts", "tsx", "py", "pyw",
-    "sh", "bash", "zsh", "c", "h", "cpp", "cc", "hpp", "java", "cs", "go", "rs",
-    "rb", "php", "pl", "sql", "csv", "tsv", "env", "service", "rules", "list",
-    "gitignore", "dockerfile", "makefile", "properties",
+    "sh", "bash", "zsh", "c", "h", "cpp", "cc", "hpp", "cxx", "java", "cs",
+    "go", "rs", "rb", "php", "pl", "sql", "csv", "tsv", "env", "service",
+    "rules", "list", "gitignore", "dockerfile", "makefile", "properties",
+    # Issue #64: 対応拡張子の拡充
+    "kt", "kts", "scala", "swift", "dart", "lua", "r", "jl", "ex", "exs",
+    "erl", "hs", "vue", "svelte", "ps1", "psm1", "bat", "cmd", "vbs",
+    "tex", "bib", "rst", "adoc", "org", "gradle", "cmake", "mk", "am", "in",
+    "spec", "desktop", "socket", "timer", "target", "mount", "network",
+    "editorconfig", "gitattributes", "gitmodules", "npmrc", "lock", "pem",
+    "pub", "crt", "csr", "license", "readme", "changelog", "authors",
 }
 
 
@@ -509,6 +516,23 @@ class SftpWorker(QThread):
         self.sftp.mkdir(job["path"])
         self.status.emit("フォルダを作成しました")
         self.job_done.emit("mkdir")
+
+    def _job_touch(self, job):
+        """空のリモートファイルを新規作成する(Issue #64)。既存名は拒否。"""
+        path = job["path"]
+        # "wx"(O_EXCL)で開くので既存ファイルを壊すことはないが、
+        # 事前 stat で分かりやすいメッセージを出す
+        try:
+            self.sftp.stat(path)
+        except IOError:
+            pass
+        else:
+            raise Exception(
+                f"作成できません: {posixpath.basename(path)} は既に存在します")
+        f = self.sftp.open(path, "wx")
+        f.close()
+        self.status.emit(f"ファイルを作成しました: {posixpath.basename(path)}")
+        self.job_done.emit("touch")
 
     def _job_rename(self, job):
         old, new = job["old"], job["new"]
@@ -1211,6 +1235,19 @@ class SftpBrowser(QWidget):
             self.nav.enqueue({"kind": "mkdir",
                               "path": posixpath.join(self.cwd, name)})
 
+    def make_file(self):
+        """名前(拡張子込み)を入力して空のリモートファイルを作成(Issue #64)。"""
+        name, ok = QInputDialog.getText(
+            self, "新規ファイル", "ファイル名 (拡張子込み。例: memo.txt):")
+        name = name.strip()
+        if ok and name:
+            if "/" in name:
+                QMessageBox.warning(self, "新規ファイル",
+                                    "ファイル名に / は使えません。")
+                return
+            self.nav.enqueue({"kind": "touch",
+                              "path": posixpath.join(self.cwd, name)})
+
     def rename_selected(self):
         sel = self._selected_entries()
         if len(sel) != 1:
@@ -1419,6 +1456,7 @@ class SftpBrowser(QWidget):
         a_del = menu.addAction("削除 (Del)")
         menu.addSeparator()
         a_new = menu.addAction("新規フォルダ")
+        a_newfile = menu.addAction("新規ファイル")
         a_copy = menu.addAction("リモートパスをコピー")
         a_cd = menu.addAction("ターミナルでこのディレクトリへ移動")
         a_insert = menu.addAction("ターミナルにパスを挿入")
@@ -1449,6 +1487,8 @@ class SftpBrowser(QWidget):
             self.delete_selected()
         elif chosen is a_new:
             self.make_dir()
+        elif chosen is a_newfile:
+            self.make_file()
         elif chosen is a_ref:
             self.refresh()
         elif chosen is a_copy:
@@ -1487,7 +1527,7 @@ class SftpBrowser(QWidget):
         QMessageBox.critical(self, "SFTP", f"SFTP チャネルを開けませんでした:\n{msg}")
 
     def _on_job_done(self, kind: str):
-        if kind in ("upload", "delete", "mkdir", "rename"):
+        if kind in ("upload", "delete", "mkdir", "rename", "touch"):
             self.refresh()
 
     # ---- 後始末 -------------------------------------------------------------------

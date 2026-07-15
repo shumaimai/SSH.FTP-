@@ -164,3 +164,17 @@ def test_cursor_status_is_one_based(editor_window):
     w._update_cursor_status()
     msg = w.statusBar().currentMessage()
     assert "行 1" in msg and "列 1" in msg
+
+
+def test_lang_for_expanded_extensions():
+    """Issue #64: 追加拡張子の言語判定。"""
+    from hashi.editor import _lang_for
+
+    assert _lang_for("Main.kt") == "c"
+    assert _lang_for("app.swift") == "c"
+    assert _lang_for("App.vue") == "js"
+    assert _lang_for("deploy.ps1") == "shell"
+    assert _lang_for("analysis.R") == "shell"
+    assert _lang_for(".editorconfig") == "conf"
+    assert _lang_for("app.properties") == "conf"
+    assert _lang_for("readme.unknownext") == "plain"
