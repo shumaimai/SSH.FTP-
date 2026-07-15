@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 NETPLAN_DIR = "/etc/netplan"
 DROPIN_PATH = f"{NETPLAN_DIR}/90-hashi.yaml"
+DROPIN_BASENAME = posixpath.basename(DROPIN_PATH)
 SENTINEL = "/tmp/hashi-netplan-armed"
 ROLLBACK_MARKER = "/tmp/hashi-netplan-rolledback"
 DEFAULT_ROLLBACK_SEC = 20
@@ -114,11 +115,20 @@ def build_netplan_yaml(iface: str, address_cidr: str, gateway: str = "",
     return "\n".join(lines) + "\n"
 
 
+def dropin_exists(session) -> bool:
+    """既存の Hashi ドロップイン設定が残っているか。"""
+    rc, _out, _err = session.exec_command(f"test -f {DROPIN_PATH}")
+    return rc == 0
+
+
 def _backup(session) -> str:
     ts = time.strftime("%Y%m%d-%H%M%S")
     dest = f"/tmp/hashi-netplan-backup-{ts}.tgz"
+    # 前回の Hashi ドロップインをバックアップに含めない( Issue #71)。
+    # 復元は常に Hashi 導入前の構成 + ドロップイン削除となる。
     rc, _out, err = session.run_sudo(
-        f"tar czf {dest} -C {NETPLAN_DIR} .", _sudo_pw(session))
+        f"tar czf {dest} -C {NETPLAN_DIR} --exclude={DROPIN_BASENAME} .",
+        _sudo_pw(session))
     if rc != 0:
         raise NetAdminError(f"netplan 設定のバックアップに失敗しました: {err.strip()}")
     return dest
@@ -172,8 +182,10 @@ def _restore_script(backup: str, iface: str = "", address_cidr: str = "") -> str
     さらにロールバックが起きたことを ROLLBACK_MARKER に残し、GUI が次回
     「確定されず元へ戻った」ことをユーザーへ伝えられるようにする。
     """
+    # ドロップインを tar 展開前後の両方で消す(古いバックアップに含まれる場合も
+    # 含まれない場合も、必ず Hashi 管理外の構成に戻す: Issue #71)。
     parts = [f"rm -f {DROPIN_PATH}", f"tar xzf {backup} -C {NETPLAN_DIR}",
-             "netplan apply"]
+             f"rm -f {DROPIN_PATH}", "netplan apply"]
     if iface and address_cidr:
         parts.append(f"ip addr del {address_cidr} dev {iface} 2>/dev/null || true")
     parts.append(f"touch {ROLLBACK_MARKER}")
@@ -240,6 +252,40 @@ def current_gateway(session, iface: str = "") -> str:
     return ""
 
 
+def fallback_cleanup_addresses(session, iface: str, keep_cidr: str) -> list[str]:
+    """新 IP への接続が取れない場合の残留アドレス掃除フォールバック。
+
+    実行中の接続が切れる可能性があるため、削除コマンドを `nohup` + 1 秒 sleep
+    でバックグラウンド化し、応答を待たずに確実にサーバー側で実行されるようにする。
+    実際の削除結果は確認できない(接続が切れるため)ので、削除対象の CIDR 一覧を返す。
+    """
+    rc, out, err = session.exec_command(f"ip -o -4 addr show dev {iface}")
+    if rc != 0:
+        raise NetAdminError(f"アドレス一覧を取得できません: {err.strip()}")
+    keep = str(ipaddress.ip_interface(keep_cidr).ip)
+    to_delete = []
+    for line in out.splitlines():
+        parts = line.split()
+        if "inet" not in parts or "host" in parts:
+            continue
+        cidr = parts[parts.index("inet") + 1]
+        if str(ipaddress.ip_interface(cidr).ip) == keep:
+            continue
+        to_delete.append(cidr)
+    if not to_delete:
+        return []
+    deletions = "; ".join(
+        f"ip addr del {c} dev {iface} 2>/dev/null || true" for c in to_delete)
+    # 1 秒待ってから削除し、SSH 応答が返ってきて接続が閉じてから実行されるようにする。
+    inner = f"sleep 1; {deletions}"
+    nohup_cmd = f"nohup sh -c {_shq(inner)} >/dev/null 2>&1 &"
+    script = f"sh -c {_shq(nohup_cmd)}"
+    rc, _out, err = session.run_sudo(script, _sudo_pw(session))
+    if rc != 0:
+        raise NetAdminError(f"旧セッション経由の掃除に失敗しました: {err.strip()}")
+    return to_delete
+
+
 def cleanup_addresses(session, iface: str, keep_cidr: str) -> list[str]:
     """iface 上の IPv4 アドレスを keep_cidr 以外すべて削除する(残留 IP の掃除)。
 
@@ -287,8 +333,10 @@ def apply_static_ip(session, *, iface: str, address_cidr: str,
     post_confirm(new_ip) は確定(disarm)後に呼ばれる後片付けフック。旧 IP の
     残留アドレス掃除(cleanup_addresses)に使う。旧 IP 経由の接続を切る操作を
     含むため、確定の前ではなく**後**に、新 IP 側の接続で行うこと。失敗しても
-    適用自体は成功として扱う(戻り値 "cleaned" に結果を入れる)。
-    returns {"backup", "dropin", "confirmed", "new_ip", "iface", "cleaned"}。
+    適用自体は成功として扱う(戻り値 "cleaned" / "cleanup_note" に結果を入れる)。
+    post_confirm は削除した CIDR の list、あるいは {"removed": [...], "note": str}
+    を返せる。
+    returns {"backup", "dropin", "confirmed", "new_ip", "iface", "cleaned", "cleanup_note"}。
     """
     _validate(address_cidr, gateway, nameservers)
     if not detect_netplan(session):
@@ -324,10 +372,17 @@ def apply_static_ip(session, *, iface: str, address_cidr: str,
             f"確定より先に自動ロールバック({rollback_sec} 秒)が作動したため、"
             "設定は元に戻りました。ロールバック秒数を増やして再試行してください。")
     cleaned = []
+    cleanup_note = ""
     if post_confirm is not None:
         try:
-            cleaned = post_confirm(new_ip) or []
+            pc = post_confirm(new_ip)
+            if isinstance(pc, dict):
+                cleaned = pc.get("removed") or []
+                cleanup_note = pc.get("note", "")
+            else:
+                cleaned = pc or []
         except Exception:  # noqa: BLE001 掃除の失敗で適用成功を覆さない
             logger.warning("確定後の残留アドレス掃除に失敗", exc_info=True)
     return {"backup": backup, "dropin": DROPIN_PATH, "confirmed": confirmed,
-            "new_ip": new_ip, "iface": iface, "cleaned": cleaned}
+            "new_ip": new_ip, "iface": iface, "cleaned": cleaned,
+            "cleanup_note": cleanup_note}

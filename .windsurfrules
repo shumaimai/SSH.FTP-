@@ -117,6 +117,11 @@
   `ip addr del` で新 IP を、確定後は `cleanup_addresses` で旧 IP を明示的に消すこと。
   旧 IP の掃除は旧接続を切るため、**確定後に新 IP 側の接続から**行うこと。
   `scope host`(ループバック)には絶対に触らない。
+- バックアップ(`tar`)からは Hashi のドロップイン `90-hashi.yaml` を**除外**すること。
+  復元は常に Hashi 導入前の構成 + ドロップイン削除となる (#71)。
+- `cleanup_addresses` の新 IP 接続が取れない場合は、旧セッション経由の
+  `fallback_cleanup_addresses` を試みる。これも不可ならユーザーに手動削除コマンドを
+  明示すること (#71)。
 - ロールバックが起きたら `ROLLBACK_MARKER` を残し、GUI が次回ユーザーへ通知する。
   黙って元に戻さないこと。
 

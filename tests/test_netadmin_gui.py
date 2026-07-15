@@ -51,6 +51,18 @@ def test_netadmin_dialog_prefills_gateway_and_dns(qapp):
     assert dlg.sp_rollback.value() == 20
 
 
+def test_netadmin_dialog_shows_existing_dropin_warning(qapp):
+    """前回の固定設定がある場合、ダイアログに置き換え警告を表示する (#71)。"""
+    from PySide6.QtWidgets import QLabel
+
+    from hashi.dialogs import NetAdminDialog
+
+    dlg = NetAdminDialog(interfaces=[], existing_dropin=True)
+    labels = [w for w in dlg.findChildren(QLabel)
+              if "前回の固定設定" in w.text()]
+    assert len(labels) == 1
+
+
 def test_netadmin_worker_calls_apply_with_settings(qapp, monkeypatch):
     import hashi.mainwindow as mw
     from hashi.config import Profile
@@ -123,6 +135,43 @@ def test_netadmin_worker_reports_error(qapp, monkeypatch):
     worker.fail.connect(fails.append)
     worker.run()
     assert fails == ["疎通確認に失敗しました"]
+
+
+def test_netadmin_worker_post_confirm_fallback(qapp, monkeypatch):
+    """新 IP 接続が取れない場合、旧セッション経由のフォールバック掃除を試みる (#71)。"""
+    import hashi.mainwindow as mw
+    from hashi.config import Profile
+
+    calls = []
+
+    class _OldSess:
+        _hashi_sudo_pw = None
+
+        def is_alive(self):
+            return True
+
+    def fake_connect_new(ip):
+        return None
+
+    def fake_fallback_cleanup(session, iface, keep):
+        calls.append(("fallback", iface, keep))
+        return ["192.168.1.50/24"]
+
+    monkeypatch.setattr(mw.netadmin, "fallback_cleanup_addresses",
+                        fake_fallback_cleanup)
+    cfg = {"iface": "eth0", "address_cidr": "192.168.1.80/24",
+           "gateway": "", "nameservers": [], "rollback_sec": 120}
+    worker = mw.NetAdminWorker(_OldSess(), Profile(host="h", username="u"),
+                               None, None, "pw", cfg)
+    worker._connect_new = fake_connect_new
+    res = worker._post_confirm("192.168.1.80")
+    assert res == {
+        "removed": ["192.168.1.50/24"],
+        "note": (
+            "新 IP への掃除用接続を確立できなかったため、"
+            "旧 IP 経由の接続から残留アドレスの削除を試行しました"
+            "(接続が切れるため結果は未確認です)。"),
+    }
 
 
 def test_sshd_dialog_current_ports_selection(qapp):

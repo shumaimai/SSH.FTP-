@@ -340,21 +340,48 @@ class NetAdminWorker(QThread):
         sess.close()
         return True
 
-    def _post_confirm(self, new_ip) -> list:
+    def _post_confirm(self, new_ip):
         """確定後の後片付け: 新 IP 側の接続から残留アドレスを掃除する。
 
         旧 IP はここで剥がれる(=旧 IP 経由のセッションは切れる)。
+        新 IP への接続が取れない場合は、旧セッションを使ったフォールバックを試みる。
+        フォールバックも不可ならユーザーが手動で削除できるようメッセージを返す。
         """
+        iface = self.settings["iface"]
+        keep = self.settings["address_cidr"]
         sess = self._connect_new(new_ip)
-        if sess is None:
-            logger.warning("掃除用の新 IP 接続に失敗(残留アドレスは未掃除)")
-            return []
-        try:
-            sess._hashi_sudo_pw = self.sudo_pw
-            return netadmin.cleanup_addresses(
-                sess, self.settings["iface"], self.settings["address_cidr"])
-        finally:
-            sess.close()
+        if sess is not None:
+            try:
+                sess._hashi_sudo_pw = self.sudo_pw
+                removed = netadmin.cleanup_addresses(sess, iface, keep)
+                return removed or []
+            finally:
+                sess.close()
+        logger.warning(
+            "掃除用の新 IP 接続に失敗。旧セッション経由のフォールバック掃除を試みます")
+        old = self.session
+        if old is not None and getattr(old, "is_alive", lambda: False)():
+            try:
+                old._hashi_sudo_pw = self.sudo_pw
+                removed = netadmin.fallback_cleanup_addresses(old, iface, keep)
+                return {
+                    "removed": removed or [],
+                    "note": (
+                        "新 IP への掃除用接続を確立できなかったため、"
+                        "旧 IP 経由の接続から残留アドレスの削除を試行しました"
+                        "(接続が切れるため結果は未確認です)。"),
+                }
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "旧セッション経由のフォールバック掃除で例外", exc_info=True)
+        return {
+            "removed": [],
+            "note": (
+                "新 IP への掃除用接続を確立できず、"
+                "旧 IP 経由の掃除も行えませんでした。\n"
+                f"旧 IP が残っている場合は、サーバー上で手動で削除してください:\n"
+                f"  ip addr del <旧IP> dev {iface}"),
+        }
 
     def run(self):
         try:
@@ -1453,15 +1480,22 @@ class SessionWindow(_SharedOps, QMainWindow):
             QMessageBox.warning(self, "IP 固定", str(e))
             return
         gateway = netadmin.current_gateway(session)
+        existing_dropin = netadmin.dropin_exists(session)
         dlg = NetAdminDialog(self, interfaces=interfaces,
-                             default_gateway=gateway, default_dns="1.1.1.1")
+                             default_gateway=gateway, default_dns="1.1.1.1",
+                             existing_dropin=existing_dropin)
         if not dlg.exec():
             return
         cfg = dlg.result_settings()
+        replace_note = (
+            "<b>前回の固定設定が見つかります。</b>"
+            "適用すると前回の固定設定を置き換えます。<br>"
+            if existing_dropin else "")
         if not DoubleCheckDialog.confirm(
                 self, "サーバーの IP 固定",
                 f"インターフェース <b>{cfg['iface']}</b> を "
                 f"<b>{cfg['address_cidr']}</b> に固定します。<br>"
+                + replace_note +
                 "誤ると SSH に接続できなくなる可能性があります"
                 f"(適用前にバックアップし、{cfg['rollback_sec']} 秒以内に新しい IP へ"
                 "疎通できなければ自動で元へ戻します)。<br>"
@@ -1489,6 +1523,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         cleaned_note = (f"残留アドレスを掃除: {', '.join(cleaned)}\n" if cleaned
                         else "残留アドレスの掃除は行われませんでした"
                              "(旧 IP が残る場合は再起動で消えます)。\n")
+        cleanup_note = res.get("cleanup_note", "")
         profile_note = (f"接続プロファイルの IP を {new_ip} に自動更新しました。\n"
                         if updated else
                         "接続プロファイルは見つからなかったため未更新です。\n")
@@ -1497,7 +1532,7 @@ class SessionWindow(_SharedOps, QMainWindow):
             "IP を固定しました。\n"
             f"バックアップ: {res.get('backup')}\n"
             f"適用ファイル: {res.get('dropin')}\n"
-            + cleaned_note + profile_note +
+            + cleaned_note + cleanup_note + profile_note +
             "\n旧 IP のこの接続は切断されるため、ウィンドウを閉じます。"
             "サーバー一覧から新しい IP で再接続してください。")
         self._close_sessions_for_profile()

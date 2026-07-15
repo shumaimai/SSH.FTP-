@@ -142,6 +142,9 @@ def test_happy_path_sequence_and_disarm():
     i_disarm = max(i for i, c in enumerate(sess.calls)
                    if f"test -f {netadmin.SENTINEL} && rm -f {netadmin.SENTINEL}" in c)
     assert i_backup < i_install < i_gen < i_arm < i_apply < i_disarm
+    # バックアップから Hashi ドロップインを除外 (#71)
+    backup_cmd = sess.calls[i_backup]
+    assert f"--exclude={netadmin.DROPIN_BASENAME}" in backup_cmd
     assert res["new_ip"] == "192.168.1.10"
 
 
@@ -168,6 +171,8 @@ def test_unreachable_rolls_back():
     # 残留アドレスの削除と、ロールバック痕跡(マーカー)も含む (#61)
     assert "ip addr del 192.168.1.10/24 dev eth0" in rollback[0]
     assert f"touch {netadmin.ROLLBACK_MARKER}" in rollback[0]
+    # ドロップインは tar 展開前後の両方で削除 (#71)
+    assert rollback[0].count(f"rm -f {netadmin.DROPIN_PATH}") >= 2
 
 
 def test_apply_failure_rolls_back():
@@ -217,7 +222,17 @@ def test_post_confirm_cleanup_result_and_isolation():
         sess2, iface="eth0", address_cidr="192.168.1.10/24",
         verify_reachable=lambda ip: True, post_confirm=boom)
     assert res2["confirmed"] is True
-    assert res2["cleaned"] == []
+
+
+def test_post_confirm_dict_note_is_passed():
+    """post_confirm が dict を返した場合、cleaned と cleanup_note に分離される (#71)。"""
+    sess = FakeSession()
+    res = apply_static_ip(
+        sess, iface="eth0", address_cidr="192.168.1.10/24",
+        verify_reachable=lambda ip: True,
+        post_confirm=lambda ip: {"removed": ["192.168.1.50/24"], "note": "フォールバック掃除を試行"})
+    assert res["cleaned"] == ["192.168.1.50/24"]
+    assert res["cleanup_note"] == "フォールバック掃除を試行"
 
 
 def test_cleanup_addresses_removes_all_but_keep():
@@ -256,3 +271,34 @@ def test_consume_rollback_marker():
     assert netadmin.consume_rollback_marker(sess) is True
     sess.responses[key] = (1, "", "")
     assert netadmin.consume_rollback_marker(sess) is False
+
+
+def test_dropin_exists_detects_file():
+    sess = FakeSession()
+    sess.responses[f"test -f {netadmin.DROPIN_PATH}"] = (0, "", "")
+    assert netadmin.dropin_exists(sess) is True
+    sess2 = FakeSession()
+    sess2.responses[f"test -f {netadmin.DROPIN_PATH}"] = (1, "", "")
+    assert netadmin.dropin_exists(sess2) is False
+
+
+def test_fallback_cleanup_addresses_deletes_old_ip_in_background():
+    """旧セッション経由の掃除は nohup + sleep で切断後も実行される (#71)。"""
+    sess = FakeSession()
+    removed = netadmin.fallback_cleanup_addresses(
+        sess, "eth0", "192.168.1.10/24")
+    assert removed == ["192.168.1.50/24"]
+    cmd = [c for c in sess.calls if "nohup" in c][0]
+    assert "sleep 1" in cmd
+    assert "ip addr del 192.168.1.50/24 dev eth0" in cmd
+    # ループバック(scope host)と keep は含めない
+    assert "127.0.0.1" not in cmd
+    assert "192.168.1.10/24" not in cmd
+
+
+def test_fallback_cleanup_addresses_keeps_target():
+    sess = FakeSession()
+    removed = netadmin.fallback_cleanup_addresses(
+        sess, "eth0", "192.168.1.50/24")
+    assert removed == []
+    assert not any("nohup" in c for c in sess.calls)

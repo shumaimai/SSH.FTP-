@@ -589,7 +589,8 @@ class NetAdminDialog(QDialog):
 
     def __init__(self, parent=None, interfaces=None,
                  default_rollback: int = 20,
-                 default_gateway: str = "", default_dns: str = "1.1.1.1"):
+                 default_gateway: str = "", default_dns: str = "1.1.1.1",
+                 existing_dropin: bool = False):
         super().__init__(parent)
         self.setWindowTitle("サーバーの IP を固定 (netplan)")
         self.setModal(True)
@@ -620,6 +621,14 @@ class NetAdminDialog(QDialog):
         form.addRow("DNS", self.ed_dns)
         form.addRow("自動ロールバック", self.sp_rollback)
 
+        self.existing = None
+        if existing_dropin:
+            self.existing = QLabel(
+                "⚠ 前回の固定設定 (/etc/netplan/90-hashi.yaml) が見つかります。"
+                "適用すると前回の固定設定を置き換えます。")
+            self.existing.setWordWrap(True)
+            self.existing.setStyleSheet("color:#d0a050;")
+
         warn = QLabel(
             "⚠ ネットワーク設定を変更します。誤ると SSH ごと切断されます。安全のため、"
             "適用前にバックアップし、指定秒数内に新しい IP への疎通が確認できなければ"
@@ -636,6 +645,8 @@ class NetAdminDialog(QDialog):
 
         root = QVBoxLayout(self)
         root.addLayout(form)
+        if self.existing:
+            root.addWidget(self.existing)
         root.addWidget(warn)
         root.addWidget(buttons)
 
