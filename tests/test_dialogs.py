@@ -106,6 +106,18 @@ def test_switching_auth_method_updates_visible_rows(qapp):
     assert dialog.ed_passphrase.isHidden()
 
 
+def test_agent_forwarding_checkbox_reflects_profile(qapp):
+    dialog = ConnectDialog(profile=Profile(agent_forwarding=True))
+    assert dialog.chk_agent_forward.isChecked()
+
+
+def test_result_profile_includes_agent_forwarding(qapp):
+    dialog = ConnectDialog(profile=Profile(agent_forwarding=False))
+    dialog.chk_agent_forward.setChecked(True)
+    profile = dialog.result_profile()
+    assert profile.agent_forwarding is True
+
+
 def test_keygen_dialog_uses_result_settings_and_confirms_overwrite(qapp, tmp_path, monkeypatch):
     import hashi.dialogs as dialogs
 

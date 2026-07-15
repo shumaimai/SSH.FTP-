@@ -158,6 +158,7 @@ class SshSession:
         self.known_hosts = known_hosts or KnownHosts()
         self.transport: paramiko.Transport | None = None
         self._jump_transports: list[paramiko.Transport] = []
+        self._agent_handlers: list[paramiko.agent.AgentRequestHandler] = []
 
     # ---- 接続 -------------------------------------------------------------
     def connect(self, ui) -> None:
@@ -354,6 +355,15 @@ class SshSession:
         assert self.transport is not None
         ch = self.transport.open_session()
         ch.get_pty(term="xterm-256color", width=cols, height=rows)
+        if self.profile.agent_forwarding:
+            try:
+                handler = paramiko.agent.AgentRequestHandler(ch)
+                # GC されるとハンドラが止まるのでチャネルとセッション両方に保持
+                ch._hashi_agent_handler = handler
+                self._agent_handlers.append(handler)
+            except Exception:
+                logger.warning("エージェントフォワーディングの設定に失敗しました",
+                               exc_info=True)
         ch.invoke_shell()
         return ch
 
@@ -430,6 +440,13 @@ class SshSession:
         return bool(self.transport and self.transport.is_active())
 
     def close(self) -> None:
+        # エージェントフォワーディングのスレッド/ソケットを先に片付ける
+        for handler in self._agent_handlers:
+            try:
+                handler.close()
+            except Exception:
+                logger.debug("agent handler の close() に失敗 (無視)", exc_info=True)
+        self._agent_handlers = []
         if self.transport is not None:
             try:
                 self.transport.close()

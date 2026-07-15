@@ -24,6 +24,16 @@ Host no-proxy
     User direct
     ProxyJump none
 
+Host agent-yes
+    HostName 10.0.0.8
+    User agentuser
+    ForwardAgent yes
+
+Host agent-no
+    HostName 10.0.0.9
+    User agentuser
+    ForwardAgent no
+
 Host *
     User fallback
 """
@@ -117,3 +127,20 @@ def test_ssh_core_uses_resolution(tmp_path, monkeypatch):
     # エイリアスではなく解決後の 127.0.0.1:1 へ接続しようとしたこと
     assert "127.0.0.1:1" in str(ei.value)
     assert sess.profile.username == "u"
+
+
+def test_forwardagent_yes_enables_agent_forwarding(cfg):
+    r = resolve_profile(Profile(host="agent-yes", username="u"), cfg)
+    assert r.agent_forwarding is True
+
+
+def test_forwardagent_no_keeps_default(cfg):
+    r = resolve_profile(Profile(host="agent-no", username="u"), cfg)
+    assert r.agent_forwarding is False
+
+
+def test_profile_agent_forwarding_wins_over_config(cfg):
+    """Profile 側で明示 ON にしていれば sshconfig の ForwardAgent no を上書く。"""
+    r = resolve_profile(Profile(host="agent-no", username="u",
+                                agent_forwarding=True), cfg)
+    assert r.agent_forwarding is True

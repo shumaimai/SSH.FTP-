@@ -1,7 +1,7 @@
 """~/.ssh/config の読み込み(Host エイリアス解決)。
 
 接続ダイアログのホスト欄に OpenSSH の Host エイリアスを書けるようにする。
-対応キー: HostName / User / Port / IdentityFile / ProxyJump。
+対応キー: HostName / User / Port / IdentityFile / ProxyJump / ForwardAgent。
 
 ProxyCommand は未対応(任意の外部コマンド実行が絡むため)。黙って無視すると
 「踏み台を経由したつもりが直接接続していた」という事故になるため、検出したら
@@ -76,9 +76,14 @@ def resolve_profile(profile: Profile, path: Path | None = None) -> Profile:
     if not proxy_jump and _wants_proxy("proxyjump"):
         proxy_jump = str(entry["proxyjump"]).strip()
 
-    if (host, port, username, key_path, proxy_jump) == (
+    agent_forwarding = profile.agent_forwarding
+    if not agent_forwarding and entry.get("forwardagent", "").strip().lower() == "yes":
+        agent_forwarding = True
+
+    if (host, port, username, key_path, proxy_jump, agent_forwarding) == (
             profile.host, profile.port, profile.username,
-            profile.key_path, profile.proxy_jump):
+            profile.key_path, profile.proxy_jump, profile.agent_forwarding):
         return profile
     return replace(profile, host=host, port=port, username=username,
-                   key_path=key_path, proxy_jump=proxy_jump)
+                   key_path=key_path, proxy_jump=proxy_jump,
+                   agent_forwarding=agent_forwarding)

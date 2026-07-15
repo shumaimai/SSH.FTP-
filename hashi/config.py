@@ -45,6 +45,7 @@ class Profile:
     key_path: str = ""            # auth_method == key のときの秘密鍵パス
     initial_path: str = ""        # 接続直後に開くリモートパス(空ならホーム)
     proxy_jump: str = ""          # 踏み台 (OpenSSH ProxyJump 書式。カンマ区切りで多段)
+    agent_forwarding: bool = False  # SSH エージェントフォワーディング(ssh -A 相当)
     save_secrets: bool = True     # パスワード/パスフレーズを保存するか
     sudo_same_as_password: bool = True  # sudo パスワード = ログインパスワード
 
