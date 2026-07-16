@@ -7,6 +7,8 @@
 パレットは main.py の Fusion ダークテーマと一致させてある。テーマ側を
 変えるときはここも同時に更新する。
 """
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel
 
 # ---- カラーパレット(Fusion ダークと同系。#RRGGBB のみ) --------------------
@@ -23,6 +25,18 @@ BORDER = "#444c56"       # 枠線
 WARN = "#d0a050"         # 警告(取り返しがつきにくい操作の注意書き)
 ERROR = "#e06c75"        # エラー・危険
 OK = "#98c379"           # 成功・安全
+
+# プロファイルの色マーカー(#81)。統一感のため自由入力ではなくこのプリセットのみ
+PROFILE_COLORS: list[tuple[str, str]] = [
+    ("なし", ""),
+    ("レッド", "#e06c75"),
+    ("オレンジ", "#d19a66"),
+    ("イエロー", "#e5c07b"),
+    ("グリーン", "#98c379"),
+    ("シアン", "#56b6c2"),
+    ("ブルー", "#61afef"),
+    ("パープル", "#c678dd"),
+]
 
 # ---- 寸法(8px グリッド) ---------------------------------------------------
 SPACING = 8              # 余白の基本単位。マージン/間隔は 8 の倍数を使う
@@ -55,3 +69,20 @@ def muted_label(text: str) -> QLabel:
 def muted_span(text: str) -> str:
     """リッチテキスト内で補足を控えめ色にする(<span> を返す)。"""
     return f"<span style='color:{FG_MUTED};'>{text}</span>"
+
+
+def color_dot_icon(color: str, size: int = 12) -> QIcon:
+    """色マーカー(●)アイコン。空文字なら控えめな輪郭だけの丸を返す。"""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.Antialiasing)
+    if color:
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.NoPen)
+    else:
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QColor(BORDER))
+    painter.drawEllipse(1, 1, size - 2, size - 2)
+    painter.end()
+    return QIcon(pm)
