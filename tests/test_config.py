@@ -47,3 +47,12 @@ def test_wrong_json_types_warn_and_use_defaults(tmp_path, caplog):
     assert "profiles.json を読み込めません" in caplog.text
     assert "settings.json を読み込めません" in caplog.text
     assert "known_hosts.json を読み込めません" in caplog.text
+
+
+def test_keepalive_interval_roundtrip(tmp_config):
+    from hashi.config import Settings
+    s = Settings()
+    assert s.get("keepalive_interval") == 30
+    s.set("keepalive_interval", 0)
+    s2 = Settings()
+    assert s2.get("keepalive_interval") == 0

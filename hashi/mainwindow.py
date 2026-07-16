@@ -69,11 +69,13 @@ class ConnectWorker(QThread):
     fail = Signal(str)       # 空文字 = キャンセル(静かに終了)
 
     def __init__(self, profile: Profile, known_hosts: KnownHosts,
-                 credentials: CredentialStore | None = None):
+                 credentials: CredentialStore | None = None,
+                 settings: Settings | None = None):
         super().__init__()
         self.profile = profile
         self.known_hosts = known_hosts
         self.credentials = credentials
+        self.settings = settings
         self._evt = threading.Event()
         self._resp = None
         self._tried_kinds: set[str] = set()
@@ -139,6 +141,8 @@ class ConnectWorker(QThread):
 
     def run(self):
         session = SshSession(self.profile, self.known_hosts)
+        if self.settings:
+            session.keepalive = self.settings.get("keepalive_interval")
         try:
             session.connect(self)
             self.ok.emit(session)
@@ -1289,7 +1293,8 @@ class SessionWindow(_SharedOps, QMainWindow):
 
     # ---- 接続 --------------------------------------------------------------
     def start_connect(self):
-        worker = ConnectWorker(self.profile, self.known_hosts, self.credentials)
+        worker = ConnectWorker(self.profile, self.known_hosts, self.credentials,
+                               self.settings)
         worker.ask_secret.connect(
             lambda prompt, ds, cs, w=worker:
             w.provide(SecretDialog.ask(self, prompt, ds, cs))
