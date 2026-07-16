@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 from collections import defaultdict, deque
+from functools import partial
 
 import pyte
 from PySide6.QtCore import QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
@@ -25,6 +26,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QWidget
 from wcwidth import wcwidth
+
+from .dialogs import SnippetVariablesDialog
+from .snippets import expand_snippet
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +263,7 @@ class TerminalWidget(QWidget):
         self._preedit = ""  # IME 変換中文字列
         self._last_title = ""
         self._right_click_paste = right_click_paste
+        self._snippet_store = None  # 右クリックメニューのスニペット用
         self._last_pw_prompt = ""  # 直近に通知したプロンプト(重複通知防止)
         self._session_log = None  # SessionLog (受信出力の自動保存)
 
@@ -649,6 +654,13 @@ class TerminalWidget(QWidget):
         menu.addSeparator()
         act_pw = menu.addAction("🔑 保存したパスワードを送信")
         act_clear_sel = menu.addAction("選択解除")
+        if self._snippet_store is not None and self._snippet_store.snippets:
+            menu.addSeparator()
+            m_snippets = menu.addMenu("スニペット")
+            for snippet in self._snippet_store.snippets:
+                act = m_snippets.addAction(snippet.name)
+                act.setToolTip(snippet.body)
+                act.triggered.connect(partial(self._send_snippet, snippet))
         chosen = menu.exec(ev.globalPos())
         if chosen == act_copy:
             self.copy_selection()
@@ -659,6 +671,20 @@ class TerminalWidget(QWidget):
         elif chosen == act_clear_sel:
             self._sel_anchor = self._sel_end = None
             self._dirty = True
+
+    def set_snippet_store(self, store):
+        """右クリックメニューに表示する SnippetStore を設定する。"""
+        self._snippet_store = store
+
+    def _send_snippet(self, snippet):
+        """スニペットを変数置換してターミナルへ送信する。"""
+        values = SnippetVariablesDialog.ask(self, snippet.body)
+        if values is None:
+            return
+        text = expand_snippet(snippet.body, values)
+        if snippet.send_enter:
+            text += "\n"
+        self.send_text(text)
 
     def _has_selection(self) -> bool:
         return (
