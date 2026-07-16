@@ -3,7 +3,22 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-07-17
 ### 追加
+- **スニペット(よく使うコマンド、Issue #83)**。登録したコマンドをメニュー /
+  ターミナル右クリックからワンクリック送信。本文の `{{変数名}}` は送信時に入力。
+  自動送信はしない設計(sudo ボタンと同思想)で、Enter 付き送信は明示フラグ。
+- **キープアライブと自動再接続(Issue #84)**。キープアライブ間隔を設定可能に
+  (既定 30 秒)。切断を検知すると「再接続」バーを表示し、設定で指数バックオフの
+  自動リトライ。再接続時はターミナル / SFTP ワーカー / 権限管理を新しい接続へ
+  張り替え、転送キューは維持する。
+- **セッションログの自動保存(Issue #85、PuTTY logging 相当)**。受信した出力を
+  プレーンテキストでローカルへ追記(入力は記録しない)。設定でオン/オフと保存先、
+  メニューから開始/停止。書き込み失敗はログのみ停止しセッションは継続。
+- **SSH エージェントフォワーディング(Issue #86、ssh -A 相当)**。接続設定で
+  明示オプトイン(既定オフ・リスクの注意書き付き)。`~/.ssh/config` の
+  `ForwardAgent yes` も反映。実 sshd で転送鍵の一覧表示を確認済み。
 - **ターミナルの配色テーマとフォント選択(Issue #78)**。設定ダイアログで
   6 テーマ(One Half Dark / Solarized Dark / Solarized Light / Monokai /
   Dracula / Nord、`hashi/themes.py`)と等幅フォントを選択できる。
@@ -21,7 +36,18 @@
   定数・寸法・注意書き/補足ラベルのヘルパー)を追加。dialogs.py の色直書きを
   定数参照へ置換。以後の UI 変更はガイド準拠(CLAUDE.md / .windsurfrules に明記)。
 
+### 変更
+- **SFTP ブラウザのツールバーを再構成(Issue #96)**。アップロードは常時表示、
+  上へ/更新はアイコン化、低頻度の操作(ホーム / 隠しファイル / 権限無視 /
+  転送キュー表示)はプルダウンメニューへ集約。ダウンロード / 新規フォルダ /
+  削除は右クリックメニューに一本化。最小幅が 544px → 240px になり、スプリッタで
+  ファイル側を十分小さくできるようになった。転送キューは下部に常時文字表示。
+
 ### 修正
+- **リサイズ後にカーソルが新しい列数の外に残り、入力位置がずれるバグ(Issue #72
+  の続き)**。pyte の resize は幅縮小時にカーソル x を追従させないため、resize
+  成功後に `ensure_hbounds/vbounds` で新グリッド内へ clamp する(Windows Server
+  実機 + 実 bash で検証済み)。
 - **ターミナルのリサイズ / 表示切替で入力位置(カーソル)が乱れることがあるバグ
   (Issue #72)**。pyte スクリーンの resize が失敗しても描画グリッドと PTY だけ
   新サイズに更新され、シェル(新幅で折返す)と pyte(旧幅)がずれていた →
@@ -236,7 +262,8 @@
 - 削除・上書きの 2 段階確認。
 - CLI 接続診断ツール `tools/doctor.py`。
 
-[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.2.0...v0.3.0
