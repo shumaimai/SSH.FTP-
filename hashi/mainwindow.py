@@ -627,6 +627,8 @@ class SessionTab(QWidget):
         self.terminal = TerminalWidget(
             font_size=settings.get("terminal_font_size"),
             right_click_paste=settings.get("right_click_paste"),
+            theme=settings.get("terminal_theme") or "",
+            font_family=settings.get("terminal_font_family") or "",
         )
         # セッションログ (Issue #85)。設定が OFF でもインスタンスは持ち、
         # メニューから後から開始できるようにしておく。

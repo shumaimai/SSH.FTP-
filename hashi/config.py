@@ -121,6 +121,9 @@ class Settings:
         "auto_reconnect": True,         # 接続切断時の自動再接続
         "auto_reconnect_max": 5,        # 自動再接続の最大試行回数
         "terminal_font_size": 11,
+        "terminal_theme": "One Half Dark",   # 配色テーマ(hashi/themes.py)
+        "terminal_font_family": "",          # 空 = 既定の等幅候補から自動
+
         "editor_font_size": 12,
         "editor_tab_width": 4,
         "open_text_in_editor": True,    # テキストは内蔵エディタで開く

@@ -27,6 +27,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QMenu, QWidget
 from wcwidth import wcwidth
 
+from . import themes
 from .dialogs import SnippetVariablesDialog
 from .snippets import expand_snippet
 
@@ -219,7 +220,9 @@ class TerminalWidget(QWidget):
         (re.compile(r"enter passphrase for .+:\s*$", re.I), "passphrase"),
     ]
 
-    def __init__(self, parent=None, font_size: int = 11, right_click_paste: bool = True):
+    def __init__(self, parent=None, font_size: int = 11,
+                 right_click_paste: bool = True,
+                 theme: str = "", font_family: str = ""):
         super().__init__(parent)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAttribute(Qt.WA_InputMethodEnabled, True)  # 日本語 IME
@@ -238,7 +241,9 @@ class TerminalWidget(QWidget):
         self.stream = pyte.ByteStream(self.screen)
 
         self._font_size = font_size
+        self._font_family = font_family
         self._build_fonts()
+        self.set_theme(theme)
 
         self._dirty = False
         self._timer = QTimer(self)
@@ -270,7 +275,10 @@ class TerminalWidget(QWidget):
     # ---- フォント/セル寸法 --------------------------------------------------
     def _build_fonts(self):
         f = QFont()
-        f.setFamilies(["Consolas", "Cascadia Mono", "MS Gothic", "Monospace"])
+        families = ["Consolas", "Cascadia Mono", "MS Gothic", "Monospace"]
+        if self._font_family:
+            families.insert(0, self._font_family)  # 設定フォント優先(#78)
+        f.setFamilies(families)
         f.setStyleHint(QFont.Monospace)
         f.setPointSize(self._font_size)
         self._font = f
@@ -279,6 +287,37 @@ class TerminalWidget(QWidget):
         fm = QFontMetricsF(f)
         self._cw = max(1.0, fm.horizontalAdvance("M"))
         self._chh = max(1.0, fm.height())
+
+    # ---- 配色テーマ (Issue #78) ----------------------------------------------
+    def set_theme(self, name: str = ""):
+        """配色テーマを適用する(未知の名前は既定へフォールバック)。"""
+        t = themes.get_theme(name)
+        self._c_fg = QColor(t["foreground"])
+        self._c_bg = QColor(t["background"])
+        self._c_cursor = QColor(t["cursor"])
+        self._c_sel = QColor(t["selection"])
+        self._ansi = {k: QColor(v) for k, v in t["ansi"].items()}
+        self._theme_cache: dict[str, QColor] = {}
+        self._dirty = True
+        self.update()
+
+    def _resolve(self, name, default: QColor) -> QColor:
+        """pyte の色表現 (名前 or 16進6桁) を現在テーマの QColor へ。"""
+        if not name or name == "default":
+            return default
+        c = self._theme_cache.get(name)
+        if c is not None:
+            return c
+        c = self._ansi.get(name)
+        if c is None and len(name) == 6:
+            try:
+                int(name, 16)
+                c = QColor("#" + name)
+            except ValueError:
+                c = None
+        c = c or default
+        self._theme_cache[name] = c
+        return c
 
     def set_font_size(self, size: int):
         self._font_size = max(6, min(32, size))
@@ -732,7 +771,7 @@ class TerminalWidget(QWidget):
     # ---- 描画 -------------------------------------------------------------------
     def paintEvent(self, ev):
         p = QPainter(self)
-        p.fillRect(self.rect(), DEFAULT_BG)
+        p.fillRect(self.rect(), self._c_bg)
         p.setFont(self._font)
 
         sel = self._sel_range() if self._has_selection() else None
@@ -751,15 +790,15 @@ class TerminalWidget(QWidget):
                     ww = wcwidth(data)
                     if ww and ww > 1:
                         w = ww
-                fg = resolve_color(ch.fg, DEFAULT_FG)
-                bg = resolve_color(ch.bg, DEFAULT_BG)
+                fg = self._resolve(ch.fg, self._c_fg)
+                bg = self._resolve(ch.bg, self._c_bg)
                 if getattr(ch, "reverse", False):
                     fg, bg = bg, fg
                 in_sel = sel is not None and sel[0] <= row * self._cols + col <= sel[1]
                 if in_sel:
-                    bg = SELECTION_BG
+                    bg = self._c_sel
                 cell = QRectF(col * cw, y, cw * w, chh)
-                if bg != DEFAULT_BG or in_sel:
+                if bg != self._c_bg or in_sel:
                     p.fillRect(cell, bg)
                 if data and data != " ":
                     p.setPen(fg)
@@ -777,14 +816,14 @@ class TerminalWidget(QWidget):
         if not cur.hidden and not self._is_scrolled() and not self._closed:
             crect = QRectF(cur.x * cw, cur.y * chh, cw, chh)
             if self.hasFocus():
-                p.fillRect(crect, CURSOR_COLOR)
+                p.fillRect(crect, self._c_cursor)
                 ch = buffer[cur.y][cur.x]
                 if ch.data and ch.data != " ":
-                    p.setPen(DEFAULT_BG)
+                    p.setPen(self._c_bg)
                     p.setFont(self._font_bold if ch.bold else self._font)
                     p.drawText(crect, Qt.AlignLeft | Qt.AlignVCenter, ch.data)
             else:
-                p.setPen(CURSOR_COLOR)
+                p.setPen(self._c_cursor)
                 p.drawRect(crect.adjusted(0, 0, -1, -1))
 
         # IME 変換中テキストをカーソル位置に表示

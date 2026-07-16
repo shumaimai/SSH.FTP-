@@ -918,6 +918,27 @@ class SettingsDialog(QDialog):
         self.sp_tfont = QSpinBox()
         self.sp_tfont.setRange(7, 32)
         self.sp_tfont.setValue(settings.get("terminal_font_size"))
+        # 配色テーマ / フォント (Issue #78)。新しい接続から反映
+        from . import themes as _themes
+        self.cb_theme = QComboBox()
+        for name in _themes.theme_names():
+            self.cb_theme.addItem(name)
+        idx_theme = self.cb_theme.findText(
+            settings.get("terminal_theme") or _themes.DEFAULT_THEME)
+        self.cb_theme.setCurrentIndex(max(0, idx_theme))
+        self.cb_tfont_family = QComboBox()
+        self.cb_tfont_family.setEditable(True)
+        self.cb_tfont_family.addItem("(既定の等幅フォント)", "")
+        from PySide6.QtGui import QFontDatabase
+        for fam in QFontDatabase.families():
+            if QFontDatabase.isFixedPitch(fam):
+                self.cb_tfont_family.addItem(fam, fam)
+        cur_family = settings.get("terminal_font_family") or ""
+        idx_fam = self.cb_tfont_family.findData(cur_family)
+        if idx_fam >= 0:
+            self.cb_tfont_family.setCurrentIndex(idx_fam)
+        elif cur_family:
+            self.cb_tfont_family.setEditText(cur_family)
         self.sp_efont = QSpinBox()
         self.sp_efont.setRange(7, 32)
         self.sp_efont.setValue(settings.get("editor_font_size"))
@@ -945,6 +966,8 @@ class SettingsDialog(QDialog):
         form.addRow("", self.chk_extup)
         form.addRow("", self.chk_session_log)
         form.addRow("ログ保存先", log_row)
+        form.addRow("ターミナル配色テーマ", self.cb_theme)
+        form.addRow("ターミナルフォント", self.cb_tfont_family)
         form.addRow("ターミナル文字サイズ", self.sp_tfont)
         form.addRow("エディタ文字サイズ", self.sp_efont)
         form.addRow("エディタのタブ幅", self.sp_tab)
@@ -980,6 +1003,11 @@ class SettingsDialog(QDialog):
         s.set("session_log", self.chk_session_log.isChecked())
         s.set("session_log_dir", self.ed_session_log_dir.text().strip())
         s.set("terminal_font_size", self.sp_tfont.value())
+        s.set("terminal_theme", self.cb_theme.currentText())
+        family = self.cb_tfont_family.currentData()
+        if family is None:   # 手入力されたフォント名
+            family = self.cb_tfont_family.currentText().strip()
+        s.set("terminal_font_family", family or "")
         s.set("editor_font_size", self.sp_efont.value())
         s.set("editor_tab_width", self.sp_tab.value())
         s.set("keepalive_interval", self.sp_keepalive.value())
