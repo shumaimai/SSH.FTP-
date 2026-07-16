@@ -861,6 +861,7 @@ class SftpBrowser(QWidget):
 
         b_up = QPushButton("アップロード…")
         b_up.setToolTip("ローカルのファイルを選んで現在のフォルダへ送る (D&D でも可)")
+        b_up.setMinimumWidth(80)
         b_up.clicked.connect(self._pick_upload)
         bar.addWidget(b_up)
 
@@ -869,6 +870,7 @@ class SftpBrowser(QWidget):
         self.btn_more.setText("その他")
         self.btn_more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        self.btn_more.setMinimumWidth(50)
         menu = QMenu(self)
 
         self._act_home = menu.addAction("ホームへ")
@@ -953,7 +955,8 @@ class SftpBrowser(QWidget):
 
         self._btn_queue = QPushButton("転送キュー")
         self._btn_queue.setToolTip("転送ジョブの一覧を表示/隠す")
-        self._btn_queue.setFixedWidth(180)
+        self._btn_queue.setMinimumWidth(120)
+        self._btn_queue.setMaximumWidth(220)
         self._btn_queue.setStyleSheet("text-align:left; padding-left:4px;")
         self._btn_queue.clicked.connect(self._on_queue_button_clicked)
         bottom.addWidget(self._btn_queue)
