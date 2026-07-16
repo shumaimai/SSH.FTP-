@@ -57,6 +57,7 @@ from .sessionlog import SessionLog
 from .snippets import Snippet, SnippetStore, expand_snippet
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
+from .updatecheck import UpdateCheckWorker
 from .windowfit import fit_to_screen
 
 logger = logging.getLogger(__name__)
@@ -1228,6 +1229,8 @@ class LauncherWindow(_SharedOps, QMainWindow):
         v = QVBoxLayout(central)
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(8)
+        self._update_banner = self._create_update_banner()
+        v.addWidget(self._update_banner)
         title = QLabel("接続先を選択")
         title.setStyleSheet("font-size:16px; font-weight:bold;")
         btn_new = QPushButton("＋ 新しい接続")
@@ -1255,6 +1258,41 @@ class LauncherWindow(_SharedOps, QMainWindow):
         self._build_menu()
         self._reload_list()
         self.statusBar().showMessage("準備完了")
+
+        if self.settings.get("update_check"):
+            self._update_worker = UpdateCheckWorker(parent=self)
+            self._update_worker.new_version.connect(self._show_update_banner)
+            self._update_worker.start()
+
+    def _create_update_banner(self):
+        """新バージョン通知バナーを生成する。"""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(style.SPACING)
+        self._update_label = QLabel()
+        self._update_label.setWordWrap(True)
+        self._update_label.setOpenExternalLinks(True)
+        self._update_label.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        close = QPushButton("×")
+        close.setFlat(True)
+        close.setToolTip("閉じる")
+        close.clicked.connect(lambda: w.setVisible(False))
+        h.addWidget(self._update_label, 1)
+        h.addWidget(close)
+        w.setStyleSheet(
+            f"background-color:{style.ACCENT}; color:{style.FG}; "
+            f"border-radius:{style.TOAST_RADIUS}px;"
+        )
+        w.setVisible(False)
+        return w
+
+    def _show_update_banner(self, version: str, url: str):
+        self._update_label.setText(
+            f"新しいバージョン {version} が利用可能です — "
+            f"<a style='color:{style.FG};' href='{url}'>ダウンロード</a>"
+        )
+        self._update_banner.setVisible(True)
 
     def _build_menu(self):
         m_file = self.menuBar().addMenu("ファイル")

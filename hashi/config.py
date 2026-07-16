@@ -117,6 +117,7 @@ class Settings:
         "sudo_autofill": True,          # sudo プロンプト検知時に自動でパスワード送信
         "permission_override": False,   # SFTP 権限無視スイッチの既定
         "right_click_paste": True,      # 右クリックで貼り付け (PuTTY 流)
+        "update_check": True,           # 起動時に GitHub Releases を確認
         "keepalive_interval": 30,       # SSH キープアライブ間隔(秒)。0 で無効
         "auto_reconnect": True,         # 接続切断時の自動再接続
         "auto_reconnect_max": 5,        # 自動再接続の最大試行回数

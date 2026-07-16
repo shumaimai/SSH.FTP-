@@ -12,7 +12,11 @@ from hashi.config import Profile
 def launcher(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
+    from hashi.config import config_dir
     from hashi.mainwindow import LauncherWindow, SessionWindow
+    (config_dir() / "settings.json").write_text(
+        '{"update_check": false}', encoding="utf-8"
+    )
     before = list(SessionWindow._windows)
     w = LauncherWindow()
     yield w
