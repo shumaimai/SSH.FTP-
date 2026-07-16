@@ -1124,7 +1124,28 @@ class _SharedOps:
         QMessageBox.information(self, "SSH 鍵の生成", message)
 
     def _open_settings(self):
-        SettingsDialog(self.settings, self).exec()
+        if SettingsDialog(self.settings, self).exec():
+            self._apply_ui_settings_live()
+
+    def _apply_ui_settings_live(self):
+        """テーマ / フォント設定を開いている全セッションへ即時反映(#99)。
+
+        以前は「新しい接続から反映」だったが、再接続が必要で面倒という
+        オーナーのフィードバックにより、開いているターミナルにも適用する。
+        """
+        theme = self.settings.get("terminal_theme") or ""
+        family = self.settings.get("terminal_font_family") or ""
+        size = self.settings.get("terminal_font_size")
+        for win in SessionWindow._windows:
+            tab = win.session_tab
+            if tab is None:
+                continue
+            try:
+                tab.terminal.set_theme(theme)
+                tab.terminal.set_font_family(family)
+                tab.terminal.set_font_size(size)
+            except RuntimeError:
+                logger.debug("閉じられたウィンドウへの設定反映をスキップ")
 
     def _about(self):
         QMessageBox.information(

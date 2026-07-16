@@ -989,10 +989,15 @@ class SftpBrowser(QWidget):
 
         self.queue.changed.connect(self._update_queue_button)
 
-        QShortcut(QKeySequence(Qt.Key_F5), self, self.refresh)
-        QShortcut(QKeySequence(Qt.Key_Delete), self.tree, self.delete_selected)
-        QShortcut(QKeySequence(Qt.Key_F2), self.tree, self.rename_selected)
-        QShortcut(QKeySequence(Qt.Key_Backspace), self.tree, self.go_up)
+        # ショートカットは既定で WindowShortcut(ウィンドウ全体)になり、
+        # ターミナル入力中の Backspace 等まで横取りしてしまう(実機で発生)。
+        # ファイルツリーにフォーカスがあるときだけ効くように限定する。
+        for key, slot in ((Qt.Key_F5, self.refresh),
+                          (Qt.Key_Delete, self.delete_selected),
+                          (Qt.Key_F2, self.rename_selected),
+                          (Qt.Key_Backspace, self.go_up)):
+            sc = QShortcut(QKeySequence(key), self.tree, slot)
+            sc.setContext(Qt.WidgetWithChildrenShortcut)
 
     # ---- 転送キュー ---------------------------------------------------------
     def _toggle_queue_panel(self, on: bool):

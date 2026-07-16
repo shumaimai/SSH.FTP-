@@ -16,7 +16,17 @@ from collections import defaultdict, deque
 from functools import partial
 
 import pyte
-from PySide6.QtCore import QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -319,6 +329,15 @@ class TerminalWidget(QWidget):
         self._theme_cache[name] = c
         return c
 
+    def set_font_family(self, family: str):
+        """等幅フォントを差し替える(設定の即時反映用、#99)。"""
+        if family == self._font_family:
+            return
+        self._font_family = family
+        self._build_fonts()
+        self._recalc_grid()
+        self.update()
+
     def set_font_size(self, size: int):
         self._font_size = max(6, min(32, size))
         self._build_fonts()
@@ -511,6 +530,16 @@ class TerminalWidget(QWidget):
         ev.accept()
 
     # ---- キー入力 --------------------------------------------------------------
+    def event(self, ev):
+        # ターミナルにフォーカスがある間は、打鍵をウィンドウレベルの
+        # ショートカット(ファイルブラウザの Backspace=上へ 等)に横取り
+        # させない。ShortcutOverride を accept すると通常のキーイベントとして
+        # このウィジェットに届く(実機で Backspace が効かなくなる事故の再発防止)。
+        if ev.type() == QEvent.ShortcutOverride:
+            ev.accept()
+            return True
+        return super().event(ev)
+
     def keyPressEvent(self, ev):
         if self._channel is None:
             return

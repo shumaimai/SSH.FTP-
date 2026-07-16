@@ -52,3 +52,50 @@ def test_terminal_font_family_override(qapp):
     assert t2._font.families()[0] == "Consolas"
     t.deleteLater()
     t2.deleteLater()
+
+
+def test_terminal_claims_keys_via_shortcut_override(qapp):
+    """ウィンドウレベルのショートカットに打鍵を横取りさせない(#99)。
+    Backspace がファイルブラウザの「上へ」に奪われる実機バグの再発防止。"""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    from hashi.terminal import TerminalWidget
+
+    t = TerminalWidget()
+    ev = QKeyEvent(QEvent.ShortcutOverride, Qt.Key_Backspace, Qt.NoModifier)
+    ev.ignore()
+    assert t.event(ev) is True
+    assert ev.isAccepted()
+    t.deleteLater()
+
+
+def test_apply_ui_settings_live(qapp):
+    """設定保存後、開いているセッションへテーマ/フォントを即時反映(#99)。"""
+    from types import SimpleNamespace
+
+    from PySide6.QtGui import QColor
+
+    from hashi.mainwindow import LauncherWindow, SessionWindow
+    from hashi.terminal import TerminalWidget
+
+    term = TerminalWidget(theme="One Half Dark")
+
+    class FakeSettings:
+        def get(self, key):
+            return {"terminal_theme": "Dracula",
+                    "terminal_font_family": "DejaVu Sans Mono",
+                    "terminal_font_size": 13}.get(key)
+
+    fake_win = SimpleNamespace(session_tab=SimpleNamespace(terminal=term))
+    SessionWindow._windows.append(fake_win)
+    try:
+        fake_self = SimpleNamespace(settings=FakeSettings())
+        LauncherWindow._apply_ui_settings_live(fake_self)
+    finally:
+        SessionWindow._windows.remove(fake_win)
+
+    assert term._c_bg == QColor("#282a36")     # Dracula の背景
+    assert term._font.families()[0] == "DejaVu Sans Mono"
+    assert term.font_size() == 13
+    term.deleteLater()
