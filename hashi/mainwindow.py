@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -1132,6 +1134,40 @@ class _SharedOps:
         )
 
 
+def _relative_time(ts: float) -> str:
+    """UNIX 秒 → 「3 日前」のような相対表示(#81)。"""
+    if not ts:
+        return ""
+    delta = time.time() - ts
+    if delta < 60:
+        return "たった今"
+    if delta < 3600:
+        return f"{int(delta // 60)} 分前"
+    if delta < 86400:
+        return f"{int(delta // 3600)} 時間前"
+    if delta < 86400 * 30:
+        return f"{int(delta // 86400)} 日前"
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def _launcher_order(profiles, query: str = ""):
+    """(store 上の index, Profile) を検索で絞り、最終接続が新しい順に返す(#81)。
+
+    一覧はソート/フィルタで並びが変わるため、行番号ではなくこの index を
+    QListWidgetItem に持たせて編集/削除の対象を特定する。
+    """
+    q = query.strip().lower()
+    result = []
+    for i, p in enumerate(profiles):
+        haystack = " ".join(
+            [p.name, p.host, p.username, " ".join(p.tags)]).lower()
+        if q and q not in haystack:
+            continue
+        result.append((i, p))
+    result.sort(key=lambda t: (-t[1].last_connected, t[1].label().lower()))
+    return result
+
+
 class LauncherWindow(_SharedOps, QMainWindow):
     """起動時のサーバー選択ランチャー(Issue #14 段階2)。
 
@@ -1167,20 +1203,28 @@ class LauncherWindow(_SharedOps, QMainWindow):
 
         central = QWidget()
         v = QVBoxLayout(central)
-        v.setContentsMargins(10, 10, 10, 10)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(8)
         title = QLabel("接続先を選択")
         title.setStyleSheet("font-size:16px; font-weight:bold;")
         btn_new = QPushButton("＋ 新しい接続")
         btn_new.clicked.connect(self.new_profile)
+        # インクリメンタル検索(#81)。名前/ホスト/ユーザー/タグで絞り込み
+        self.ed_search = QLineEdit()
+        self.ed_search.setPlaceholderText("🔍 検索 (名前 / ホスト / ユーザー / タグ)")
+        self.ed_search.setClearButtonEnabled(True)
+        self.ed_search.textChanged.connect(self._reload_list)
         self.list = QListWidget()
+        self.list.setSpacing(2)
         self.list.itemDoubleClicked.connect(self._connect_item)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._profile_menu)
         hint = QLabel("ダブルクリックで接続(新しいウィンドウが開きます)\n"
                       "右クリックで編集/削除")
-        hint.setStyleSheet("color:#8a919e;")
+        hint.setStyleSheet(f"color:{style.FG_MUTED};")
         v.addWidget(title)
         v.addWidget(btn_new)
+        v.addWidget(self.ed_search)
         v.addWidget(self.list, 1)
         v.addWidget(hint)
         self.setCentralWidget(central)
@@ -1215,10 +1259,26 @@ class LauncherWindow(_SharedOps, QMainWindow):
 
     def _reload_list(self):
         self.list.clear()
-        for p in self.store.profiles:
-            item = QListWidgetItem(p.label())
+        query = (self.ed_search.text() if hasattr(self, "ed_search") else "")
+        for idx, p in _launcher_order(self.store.profiles, query):
+            second = f"{p.username}@{p.host}:{p.port}"
+            if p.tags:
+                second += "   🏷 " + ", ".join(p.tags)
+            if p.last_connected:
+                second += f"   ⏱ {_relative_time(p.last_connected)}"
+            item = QListWidgetItem(f"{p.label()}\n{second}")
+            item.setIcon(style.color_dot_icon(p.color))
+            item.setData(Qt.UserRole, idx)   # 検索/ソートでズレない実 index
             item.setToolTip(f"{p.username}@{p.host}:{p.port} ({p.auth_method})")
             self.list.addItem(item)
+
+    def _selected_store_index(self) -> int:
+        """選択中アイテムの store.profiles 上の index(-1 = 未選択)。"""
+        item = self.list.currentItem()
+        if item is None:
+            return -1
+        idx = item.data(Qt.UserRole)
+        return idx if isinstance(idx, int) and 0 <= idx < len(self.store.profiles) else -1
 
     def new_profile(self):
         dlg = ConnectDialog(self, credentials=self.credentials)
@@ -1229,7 +1289,7 @@ class LauncherWindow(_SharedOps, QMainWindow):
             self._reload_list()
 
     def _profile_menu(self, pos):
-        row = self.list.currentRow()
+        row = self._selected_store_index()
         if row < 0:
             return
         menu = QMenu(self)
@@ -1258,9 +1318,9 @@ class LauncherWindow(_SharedOps, QMainWindow):
                 self._reload_list()
 
     def _connect_item(self, item: QListWidgetItem):
-        row = self.list.row(item)
-        if 0 <= row < len(self.store.profiles):
-            self._connect(self.store.profiles[row])
+        idx = item.data(Qt.UserRole)
+        if isinstance(idx, int) and 0 <= idx < len(self.store.profiles):
+            self._connect(self.store.profiles[idx])
 
     def _connect(self, profile: Profile):
         """独立したウィンドウを開いて接続する(常に新ウィンドウ)。"""
@@ -1453,6 +1513,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.setWindowTitle(label)
         tab.terminal.session_closed.connect(self._mark_disconnected)
         tab.terminal.session_closed.connect(self._on_session_closed)
+        self._record_last_connected(session.profile)
         self.statusBar().showMessage(f"{label} に接続しました", 5000)
         self._reconnect_attempts = 0
         self._reconnecting = False
@@ -1744,6 +1805,23 @@ class SessionWindow(_SharedOps, QMainWindow):
             "\n旧 IP のこの接続は切断されるため、ウィンドウを閉じます。"
             "サーバー一覧から新しい IP で再接続してください。")
         self._close_sessions_for_profile()
+
+    def _record_last_connected(self, profile: Profile):
+        """接続成功日時をプロファイルへ記録し、ランチャーの一覧を更新(#81)。"""
+        pid = profile.id_str()
+        updated = False
+        for p in self.store.profiles:
+            if p.id_str() == pid:
+                p.last_connected = time.time()
+                updated = True
+        if updated:
+            self.store.save()
+        launcher = LauncherWindow._instance
+        if launcher is not None:
+            try:
+                launcher._reload_list()
+            except RuntimeError:
+                logger.debug("ランチャーは閉じられているため一覧更新をスキップ")
 
     def _update_profile_host(self, new_ip: str) -> bool:
         """保存済みプロファイルのホストを新 IP に書き換える(#61)。"""

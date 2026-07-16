@@ -261,6 +261,14 @@ class ConnectDialog(QDialog):
         self.ed_proxy.setPlaceholderText(
             "例: user@bastion:22 (カンマ区切りで多段。空欄なら直接接続)")
 
+        self.ed_tags = QLineEdit(", ".join(p.tags))
+        self.ed_tags.setPlaceholderText("例: 本番, 自宅 (カンマ区切り・任意)")
+        self.cb_color = QComboBox()
+        for label, hexval in style.PROFILE_COLORS:
+            self.cb_color.addItem(style.color_dot_icon(hexval), label, hexval)
+        idx_color = self.cb_color.findData(p.color)
+        self.cb_color.setCurrentIndex(max(0, idx_color))
+
         self.chk_agent_forward = QCheckBox("エージェントフォワーディングを有効化 (ssh -A 相当)")
         self.chk_agent_forward.setChecked(p.agent_forwarding)
         self.chk_agent_forward.setToolTip(
@@ -285,6 +293,8 @@ class ConnectDialog(QDialog):
         form.addRow("鍵のパスフレーズ", self.ed_passphrase)
         form.addRow("初期パス", self.ed_initial)
         form.addRow("踏み台 (ProxyJump)", self.ed_proxy)
+        form.addRow("タグ", self.ed_tags)
+        form.addRow("色マーカー", self.cb_color)
         form.addRow("", self.chk_agent_forward)
         form.addRow("", self.chk_save)
         form.addRow("", self.chk_sudo)
@@ -360,6 +370,11 @@ class ConnectDialog(QDialog):
             agent_forwarding=self.chk_agent_forward.isChecked(),
             save_secrets=self.chk_save.isChecked(),
             sudo_same_as_password=self.chk_sudo.isChecked(),
+            tags=[t.strip() for t in self.ed_tags.text().split(",") if t.strip()],
+            color=self.cb_color.currentData() or "",
+            # 最終接続日時は編集で消さない(#81)
+            last_connected=(self._previous_profile.last_connected
+                            if self._previous_profile else 0.0),
         )
 
     def apply_credentials(self, profile: Profile) -> None:

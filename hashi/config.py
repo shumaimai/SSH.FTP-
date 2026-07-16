@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from . import __version__
@@ -48,6 +48,9 @@ class Profile:
     agent_forwarding: bool = False  # SSH エージェントフォワーディング(ssh -A 相当)
     save_secrets: bool = True     # パスワード/パスフレーズを保存するか
     sudo_same_as_password: bool = True  # sudo パスワード = ログインパスワード
+    tags: list[str] = field(default_factory=list)  # ランチャーの分類タグ(#81)
+    color: str = ""               # 色マーカー(style.PROFILE_COLORS のプリセット)
+    last_connected: float = 0.0   # 最終接続日時(UNIX 秒。0 = 未接続)
 
     def label(self) -> str:
         return self.name or f"{self.username}@{self.host}"
