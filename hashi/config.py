@@ -118,6 +118,8 @@ class Settings:
         "editor_tab_width": 4,
         "open_text_in_editor": True,    # テキストは内蔵エディタで開く
         "external_autoupload": True,    # 関連付けアプリで開いたファイルの変更を自動アップロード
+        "session_log": False,           # ターミナル受信出力を自動保存
+        "session_log_dir": "",          # 空欄 = 設定ディレクトリ/logs
     }
 
     def __init__(self, path: Path | None = None):

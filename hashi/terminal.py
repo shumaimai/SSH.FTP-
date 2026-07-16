@@ -260,6 +260,7 @@ class TerminalWidget(QWidget):
         self._last_title = ""
         self._right_click_paste = right_click_paste
         self._last_pw_prompt = ""  # 直近に通知したプロンプト(重複通知防止)
+        self._session_log = None  # SessionLog (受信出力の自動保存)
 
     # ---- フォント/セル寸法 --------------------------------------------------
     def _build_fonts(self):
@@ -282,6 +283,10 @@ class TerminalWidget(QWidget):
 
     def font_size(self) -> int:
         return self._font_size
+
+    def set_session_log(self, log):
+        """受信出力の追記ログを設定/解除する。"""
+        self._session_log = log
 
     # ---- チャネル接続 -------------------------------------------------------
     def attach(self, channel):
@@ -309,6 +314,8 @@ class TerminalWidget(QWidget):
             self.stream.feed(data)
         except Exception:
             logger.debug("未対応シーケンスを無視して継続", exc_info=True)
+        if self._session_log is not None:
+            self._session_log.write_screen(self.screen)
         self._dirty = True
 
     def _on_closed(self):
@@ -777,6 +784,16 @@ class TerminalWidget(QWidget):
     # ---- 後始末 --------------------------------------------------------------
     def detach(self):
         self._closed = True
+        if self._session_log is not None:
+            try:
+                self._session_log.flush_visible(self.screen)
+            except Exception:
+                logger.debug("セッションログの終了 flush に失敗", exc_info=True)
+            try:
+                self._session_log.close()
+            except Exception:
+                logger.debug("セッションログの close に失敗", exc_info=True)
+            self._session_log = None
         ch, self._channel = self._channel, None
         if ch is not None:
             try:

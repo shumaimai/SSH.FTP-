@@ -48,6 +48,7 @@ from .dialogs import (
 from .filebrowser import SftpBrowser
 from .forward import DynamicForward, Forward, LocalForward, RemoteForward
 from .keygen import generate_key, register_public_key
+from .sessionlog import SessionLog
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
 from .windowfit import fit_to_screen
@@ -617,6 +618,15 @@ class SessionTab(QWidget):
             font_size=settings.get("terminal_font_size"),
             right_click_paste=settings.get("right_click_paste"),
         )
+        # セッションログ (Issue #85)。設定が OFF でもインスタンスは持ち、
+        # メニューから後から開始できるようにしておく。
+        self.session_log = SessionLog(
+            session.profile.label() or session.profile.id_str(),
+            settings.get("session_log_dir") or None,
+            enabled=bool(settings.get("session_log")),
+        )
+        self.terminal.set_session_log(self.session_log)
+        self._logging_enabled_at_start = self.session_log.is_open()
         self.browser = SftpBrowser(
             session, session.profile.initial_path,
             settings=settings,
@@ -750,6 +760,30 @@ class SessionTab(QWidget):
             other.setChecked(True)
         self.terminal.setVisible(self.bt_term.isChecked())
         self.browser.setVisible(self.bt_files.isChecked())
+
+    def toggle_session_log(self) -> bool:
+        """セッションログを開始/停止し、開始状態を返す。"""
+        if self.session_log.is_open():
+            try:
+                self.session_log.flush_visible(self.terminal.screen)
+            except Exception:
+                logger.debug("セッションログ停止前の flush に失敗", exc_info=True)
+            self.session_log.close()
+            self.terminal.set_session_log(None)
+            self.session_log = SessionLog(
+                self.session.profile.label() or self.session.profile.id_str(),
+                self.settings.get("session_log_dir") or None,
+                enabled=False,
+            )
+            return False
+        # 停止中なら新しいファイルを開いて開始
+        self.session_log = SessionLog(
+            self.session.profile.label() or self.session.profile.id_str(),
+            self.settings.get("session_log_dir") or None,
+            enabled=True,
+        )
+        self.terminal.set_session_log(self.session_log)
+        return True
 
     def shutdown(self):
         for fw in self.tunnels:
@@ -1266,6 +1300,9 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.m_sess.addAction("SSH サーバー設定を変更…", self._harden_sshd)
         self.m_sess.addAction("サーバーの IP を固定…", self._static_ip)
         self.m_sess.addSeparator()
+        self.act_session_log = self.m_sess.addAction("セッションログを開始")
+        self.act_session_log.triggered.connect(self._toggle_session_log)
+        self.m_sess.addSeparator()
         self.m_sess.addAction("この接続の保存パスワードを削除",
                               self._forget_credentials)
         self.m_sess.setEnabled(False)   # 接続完了までは無効
@@ -1313,6 +1350,9 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.setCentralWidget(tab)
         self._connecting = None
         self.m_sess.setEnabled(True)
+        self.act_session_log.setText(
+            "セッションログを停止" if tab.session_log.is_open()
+            else "セッションログを開始")
         label = session.profile.label()
         self.setWindowTitle(label)
         tab.terminal.session_closed.connect(self._mark_disconnected)
@@ -1363,6 +1403,19 @@ class SessionWindow(_SharedOps, QMainWindow):
         tab = self.session_tab
         if tab is not None:
             tab.terminal.set_font_size(tab.terminal.font_size() + d)
+
+    def _toggle_session_log(self):
+        tab = self.session_tab
+        if tab is None:
+            return
+        started = tab.toggle_session_log()
+        self.act_session_log.setText(
+            "セッションログを停止" if started else "セッションログを開始")
+        if started and tab.session_log.path():
+            self.statusBar().showMessage(
+                f"セッションログ開始: {tab.session_log.path()}", 5000)
+        else:
+            self.statusBar().showMessage("セッションログを停止しました", 5000)
 
     # ---- sshd 堅牢化 (Issue #12) --------------------------------------------
     def _harden_sshd(self):

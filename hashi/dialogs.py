@@ -867,6 +867,21 @@ class SettingsDialog(QDialog):
         self.chk_editor.setChecked(settings.get("open_text_in_editor"))
         self.chk_extup = QCheckBox("関連付けアプリで開いたファイルの変更を自動アップロード")
         self.chk_extup.setChecked(settings.get("external_autoupload"))
+        self.chk_session_log = QCheckBox("ターミナル受信出力を自動保存 (PuTTY logging 相当)")
+        self.chk_session_log.setChecked(settings.get("session_log"))
+        log_row = QWidget()
+        log_lay = QHBoxLayout(log_row)
+        log_lay.setContentsMargins(0, 0, 0, 0)
+        self.ed_session_log_dir = QLineEdit(settings.get("session_log_dir") or "")
+        self.ed_session_log_dir.setPlaceholderText("空欄で既定の設定ディレクトリ/logs")
+        self.ed_session_log_dir.setEnabled(self.chk_session_log.isChecked())
+        self.btn_session_log_dir = QPushButton("参照…")
+        self.btn_session_log_dir.setEnabled(self.chk_session_log.isChecked())
+        self.btn_session_log_dir.clicked.connect(self._browse_session_log_dir)
+        self.chk_session_log.toggled.connect(self.ed_session_log_dir.setEnabled)
+        self.chk_session_log.toggled.connect(self.btn_session_log_dir.setEnabled)
+        log_lay.addWidget(self.ed_session_log_dir, 1)
+        log_lay.addWidget(self.btn_session_log_dir)
         self.sp_tfont = QSpinBox()
         self.sp_tfont.setRange(7, 32)
         self.sp_tfont.setValue(settings.get("terminal_font_size"))
@@ -881,6 +896,8 @@ class SettingsDialog(QDialog):
         form.addRow("", self.chk_override)
         form.addRow("", self.chk_editor)
         form.addRow("", self.chk_extup)
+        form.addRow("", self.chk_session_log)
+        form.addRow("ログ保存先", log_row)
         form.addRow("ターミナル文字サイズ", self.sp_tfont)
         form.addRow("エディタ文字サイズ", self.sp_efont)
         form.addRow("エディタのタブ幅", self.sp_tab)
@@ -896,6 +913,13 @@ class SettingsDialog(QDialog):
         root.addWidget(note)
         root.addWidget(buttons)
 
+    def _browse_session_log_dir(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "ログ保存先のディレクトリを選択",
+            self.ed_session_log_dir.text() or str(Path.home()))
+        if d:
+            self.ed_session_log_dir.setText(d)
+
     def _save(self):
         s = self.settings
         s.set("sudo_autofill", self.chk_sudo.isChecked())
@@ -903,6 +927,8 @@ class SettingsDialog(QDialog):
         s.set("permission_override", self.chk_override.isChecked())
         s.set("open_text_in_editor", self.chk_editor.isChecked())
         s.set("external_autoupload", self.chk_extup.isChecked())
+        s.set("session_log", self.chk_session_log.isChecked())
+        s.set("session_log_dir", self.ed_session_log_dir.text().strip())
         s.set("terminal_font_size", self.sp_tfont.value())
         s.set("editor_font_size", self.sp_efont.value())
         s.set("editor_tab_width", self.sp_tab.value())
