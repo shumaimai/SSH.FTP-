@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import netadmin, p2p, portability, sshd_admin
+from . import netadmin, p2p, portability, sshd_admin, style
 from .config import APP_VERSION, KnownHosts, Profile, ProfileStore, Settings
 from .credentials import CredentialStore
 from .dialogs import (
@@ -1282,7 +1282,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         bar.setMovable(False)
         bar.setFloatable(False)
         label = QLabel("接続が切断されました")
-        label.setStyleSheet("color:#e06c75; padding:2px 6px;")
+        label.setStyleSheet(f"color:{style.ERROR}; padding:2px 6px;")
         btn = QPushButton("再接続")
         btn.setToolTip("今すぐ再接続を試みます")
         btn.clicked.connect(self._manual_reconnect)

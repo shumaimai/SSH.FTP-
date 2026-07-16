@@ -273,3 +273,31 @@ def test_looks_text_covers_expanded_extensions(qapp):
         assert SftpBrowser._looks_text(name), name
     assert not SftpBrowser._looks_text("photo.png")
     assert not SftpBrowser._looks_text("archive.tar.gz")
+
+
+def test_sftp_worker_reconnect_swaps_session_and_sftp(qapp):
+    from hashi.filebrowser import SftpWorker
+
+    class Ftp:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Sess:
+        def __init__(self, sftp):
+            self.sftp = sftp
+
+        def open_sftp(self):
+            return self.sftp
+
+    old = Sess(Ftp("old"))
+    worker = SftpWorker(old, "nav")
+    worker.sftp = old.sftp
+    new = Sess(Ftp("new"))
+    worker._reconnect(new)
+    assert worker.session is new
+    assert worker.sftp is new.sftp
+    assert old.sftp.closed is True

@@ -64,3 +64,19 @@ def test_recover_only_dead_pid_and_sudo_retry(tmp_path):
     assert (restored2, stuck2) == (2, 0)
     remaining = {e["path"] for e in j.pending_for("A@h:22")}
     assert remaining == {"/live"}               # 生存 pid の分だけ残る
+
+
+def test_reconnect_session_replaces_session_and_clears_active(tmp_path):
+    old_sftp = FakeSFTP({"/f": 0o644}, owned=["/f"])
+    old_sess = FakeSession(old_sftp)
+    pm = PermManager(old_sess, journal=PermJournal(tmp_path / "j.json"),
+                     conn_id="A@h:22")
+    pm._acquire("/f", 0o666)
+    assert pm.session is old_sess
+
+    new_sftp = FakeSFTP({"/f": 0o644}, owned=["/f"])
+    new_sess = FakeSession(new_sftp)
+    pm.reconnect_session(new_sess)
+    assert pm.session is new_sess
+    assert pm._sftp is None
+    assert pm._active == {}
