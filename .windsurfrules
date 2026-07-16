@@ -73,6 +73,12 @@
 - sudo パスワードと同じ思想で、**スニペットも自動送信しない**。Enter を付けて送信するかは
   `send_enter` フラグで明示する。
 
+### 新バージョン通知 (`hashi/updatecheck.py`)
+
+- 起動時のバージョンチェックは **バックグラウンド `QThread` で 1 回だけ**行い、失敗は無音。
+- GitHub Releases API からは `tag_name` / `html_url` のみを使い、**自動ダウンロード/自動更新はしない**。
+- `update_check` 設定で OFF にできる。
+
 ### ウィンドウ構成（`hashi/mainwindow.py`）
 
 - 起動画面は `LauncherWindow`（接続先選択）、接続すると常に `SessionWindow`（1 接続 =
