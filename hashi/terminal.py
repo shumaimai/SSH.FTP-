@@ -405,6 +405,11 @@ class TerminalWidget(QWidget):
                                exc_info=True)
                 self._dirty = True
                 return
+            # pyte の HistoryScreen.resize は幅縮小時にカーソル行の
+            # 再配置が不完全なことがある。スクリーン範囲に収めることで、
+            # その後の描画・入力位置がグリッド外にずれるのを防ぐ (#72)
+            self.screen.ensure_hbounds()
+            self.screen.ensure_vbounds()
             self._cols, self._rows = cols, rows
             if self._channel is not None and not self._closed:
                 try:

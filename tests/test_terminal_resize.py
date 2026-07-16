@@ -64,3 +64,25 @@ def test_resize_scrolls_to_bottom_first(term):
     term._pending_grid = (term._cols + 10, term._rows + 3)
     term._apply_pending_grid()
     assert calls[:2] == ["bottom", "resize"]
+
+
+def test_resize_clamps_cursor_to_grid(term):
+    """幅縮小後もカーソルが新グリッド内に収まり、入力が表示される(#72)。
+
+    pyte.HistoryScreen.resize は列数を減らした際にカーソル x を
+    新幅に追従させない。そのままでは次の文字が画面外に書き込まれ、
+    入力位置がずれて見える。
+    """
+    term._pending_grid = (100, 30)
+    term._apply_pending_grid()
+    term._on_data(b"X" * 80)
+    assert term.screen.cursor.x == 80
+
+    term._pending_grid = (40, 30)
+    term._apply_pending_grid()
+
+    assert term.screen.columns == 40
+    assert term.screen.cursor.x < 40
+    term._on_data(b"Y")
+    assert "Y" in term.screen.display[0]
+    assert term.screen.cursor.x <= 40
