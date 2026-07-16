@@ -177,6 +177,9 @@ tests/                 pytest(ネットワーク不要。フェイク SSH を co
       (`tests/test_terminal_keys.py`: 方向/Enter/Tab/Backspace/Ctrl 英字/Ctrl+[/Alt 前置/
       IME commit・preedit/セル座標クランプ)と editor の検索空クエリ・ミス・タイトル・
       カーソル位置(`tests/test_editor.py` 追記)。描画そのものは手動確認のまま。
+- [x] **スニペット(よく使うコマンド)**(Issue #83、2026-07-16 実装)。
+      `hashi/snippets.py` + 管理/変数入力ダイアログ。`{{変数名}}` は送信時に入力。
+      自動送信せず、Enter 付きは `send_enter` フラグで。`tests/test_snippets.py` 追加。
 - [ ] exe への署名(アイコンは v0.3.0 で追加済み)。
 
 ## お作法

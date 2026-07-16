@@ -3,14 +3,17 @@
 - DoubleCheckDialog: 破壊的操作(削除/上書き)の 2 段階目。確認語の入力を要求
 - HostKeyDialog: ホスト鍵フィンガープリントの確認 (初回 / 変更検出)
 - ConnectDialog: 接続プロファイルの新規作成・編集
+- SnippetEditDialog / SnippetsManageDialog / SnippetVariablesDialog: スニペット管理
 """
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -21,7 +24,10 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -31,6 +37,7 @@ from PySide6.QtWidgets import (
 from . import style
 from .config import AUTH_AGENT, AUTH_KEY, AUTH_PASSWORD, Profile
 from .keygen import ECDSA_BITS, RSA_BITS
+from .snippets import Snippet, SnippetStore, find_variables
 
 
 class DoubleCheckDialog(QDialog):
@@ -964,3 +971,230 @@ class SettingsDialog(QDialog):
         s.set("auto_reconnect", self.chk_auto_reconnect.isChecked())
         s.set("auto_reconnect_max", self.sp_auto_reconnect_max.value())
         self.accept()
+
+
+class SnippetEditDialog(QDialog):
+    """スニペットの追加・編集。"""
+
+    def __init__(self, parent, snippet: Snippet | None = None):
+        super().__init__(parent)
+        self._snippet = snippet or Snippet()
+        self.setWindowTitle(
+            "スニペットを編集" if snippet else "スニペットを追加")
+        self.setModal(True)
+        self.setMinimumWidth(style.DIALOG_M)
+
+        form = QFormLayout()
+        self.ed_name = QLineEdit(self._snippet.name)
+        self.ed_body = QPlainTextEdit(self._snippet.body)
+        self.ed_body.setPlaceholderText("例: systemctl restart {{service}}")
+        self.ed_body.setMinimumHeight(120)
+        self.chk_enter = QCheckBox("送信後に Enter を押す")
+        self.chk_enter.setChecked(self._snippet.send_enter)
+        form.addRow("名前", self.ed_name)
+        form.addRow("コマンド", self.ed_body)
+        form.addRow(self.chk_enter)
+
+        note = style.muted_label(
+            "{{変数名}} を含めると、送信時に値を入力できます。")
+
+        buttons = QDialogButtonBox()
+        buttons.addButton("保存", QDialogButtonBox.AcceptRole)
+        buttons.addButton("キャンセル", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self._validate_accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(note)
+        root.addWidget(buttons)
+
+    def _validate_accept(self):
+        name = self.ed_name.text().strip()
+        body = self.ed_body.toPlainText()
+        if not name:
+            QMessageBox.warning(self, self.windowTitle(), "名前を入力してください。")
+            return
+        if not body:
+            QMessageBox.warning(
+                self, self.windowTitle(), "コマンド本文を入力してください。")
+            return
+        self._snippet = Snippet(
+            name=name,
+            body=body,
+            send_enter=self.chk_enter.isChecked(),
+        )
+        self.accept()
+
+    def result_snippet(self) -> Snippet:
+        return self._snippet
+
+    @staticmethod
+    def edit(parent, snippet: Snippet | None = None) -> Snippet | None:
+        dlg = SnippetEditDialog(parent, snippet)
+        if dlg.exec() == QDialog.Accepted:
+            return dlg.result_snippet()
+        return None
+
+
+class SnippetsManageDialog(QDialog):
+    """スニペットの一覧・追加・編集・削除。"""
+
+    def __init__(self, parent, store: SnippetStore):
+        super().__init__(parent)
+        self.setWindowTitle("スニペット管理")
+        self.setMinimumWidth(style.DIALOG_L)
+        self.store = store
+
+        self.list = QListWidget()
+        self.list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list.itemDoubleClicked.connect(self._edit_current)
+
+        toolbar = QHBoxLayout()
+        self.bt_add = QPushButton("追加")
+        self.bt_edit = QPushButton("編集")
+        self.bt_del = QPushButton("削除")
+        self.bt_up = QPushButton("↑")
+        self.bt_down = QPushButton("↓")
+        toolbar.addWidget(self.bt_add)
+        toolbar.addWidget(self.bt_edit)
+        toolbar.addWidget(self.bt_del)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.bt_up)
+        toolbar.addWidget(self.bt_down)
+
+        self.bt_add.clicked.connect(self._add)
+        self.bt_edit.clicked.connect(self._edit)
+        self.bt_del.clicked.connect(self._delete)
+        self.bt_up.clicked.connect(self._move_up)
+        self.bt_down.clicked.connect(self._move_down)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton("閉じる", QDialogButtonBox.RejectRole)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addWidget(self.list)
+        root.addLayout(toolbar)
+        root.addWidget(buttons)
+
+        self._reload()
+
+    def _reload(self):
+        self.list.clear()
+        for i, s in enumerate(self.store.snippets):
+            item = QListWidgetItem(s.name)
+            item.setToolTip(s.body)
+            item.setData(Qt.UserRole, i)
+            self.list.addItem(item)
+
+    def _current_index(self) -> int | None:
+        item = self.list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def _add(self):
+        snippet = SnippetEditDialog.edit(self)
+        if snippet is not None:
+            self.store.add(snippet)
+            self._reload()
+            self.list.setCurrentRow(len(self.store.snippets) - 1)
+
+    def _edit_current(self):
+        self._edit()
+
+    def _edit(self):
+        index = self._current_index()
+        if index is None:
+            return
+        snippet = SnippetEditDialog.edit(self, self.store.snippets[index])
+        if snippet is not None:
+            self.store.update(index, snippet)
+            self._reload()
+
+    def _delete(self):
+        index = self._current_index()
+        if index is None:
+            return
+        s = self.store.snippets[index]
+        r = QMessageBox.question(
+            self, "スニペットの削除",
+            f"「{s.name}」を削除しますか?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if r == QMessageBox.Yes:
+            self.store.remove(index)
+            self._reload()
+
+    def _move_up(self):
+        index = self._current_index()
+        if index is None:
+            return
+        self.store.move_up(index)
+        self._reload()
+        self.list.setCurrentRow(index - 1 if index > 0 else 0)
+
+    def _move_down(self):
+        index = self._current_index()
+        if index is None:
+            return
+        self.store.move_down(index)
+        self._reload()
+        last = len(self.store.snippets) - 1
+        self.list.setCurrentRow(index + 1 if index < last else last)
+
+    @staticmethod
+    def manage(parent, store: SnippetStore) -> None:
+        dlg = SnippetsManageDialog(parent, store)
+        dlg.exec()
+
+
+class SnippetVariablesDialog(QDialog):
+    """スニペット本文の {{変数}} に値を入力する。"""
+
+    def __init__(self, parent, body: str):
+        super().__init__(parent)
+        self.setWindowTitle("スニペットの変数入力")
+        self.setModal(True)
+        self.setMinimumWidth(style.DIALOG_M)
+        self._values: dict[str, str] = {}
+
+        variables = find_variables(body)
+        form = QFormLayout()
+        self._edits: dict[str, QLineEdit] = {}
+        for v in variables:
+            ed = QLineEdit()
+            self._edits[v] = ed
+            form.addRow(v, ed)
+
+        note = QLabel(
+            f"<span style='color:{style.FG_MUTED};'>{html.escape(body)}</span>")
+        note.setWordWrap(True)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton("送信", QDialogButtonBox.AcceptRole)
+        buttons.addButton("キャンセル", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel("以下の変数に値を入力してください。"))
+        root.addLayout(form)
+        root.addWidget(note)
+        root.addWidget(buttons)
+
+    def _accept(self):
+        self._values = {v: ed.text() for v, ed in self._edits.items()}
+        self.accept()
+
+    def result_values(self) -> dict[str, str]:
+        return dict(self._values)
+
+    @staticmethod
+    def ask(parent, body: str) -> dict[str, str] | None:
+        if not find_variables(body):
+            return {}
+        dlg = SnippetVariablesDialog(parent, body)
+        if dlg.exec() == QDialog.Accepted:
+            return dlg.result_values()
+        return None

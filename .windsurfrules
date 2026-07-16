@@ -64,6 +64,15 @@
 
 ## 壊してはいけない重要な設計（新機能ぶん）
 
+### スニペット (`hashi/snippets.py`)
+
+- よく使うコマンドを `snippets.json` に永続化する。登録/編集/削除/並べ替えは
+  `SnippetsManageDialog` から行う。
+- 本文中の `{{変数名}}` は、送信時に `SnippetVariablesDialog` で値を入力させてから
+  `expand_snippet` で置換する。
+- sudo パスワードと同じ思想で、**スニペットも自動送信しない**。Enter を付けて送信するかは
+  `send_enter` フラグで明示する。
+
 ### ウィンドウ構成（`hashi/mainwindow.py`）
 
 - 起動画面は `LauncherWindow`（接続先選択）、接続すると常に `SessionWindow`（1 接続 =

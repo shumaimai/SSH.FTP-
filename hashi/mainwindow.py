@@ -42,6 +42,8 @@ from .dialogs import (
     SasConfirmDialog,
     SecretDialog,
     SettingsDialog,
+    SnippetsManageDialog,
+    SnippetVariablesDialog,
     SshdHardenDialog,
     TunnelDialog,
     ask_secret,
@@ -50,6 +52,7 @@ from .filebrowser import SftpBrowser
 from .forward import DynamicForward, Forward, LocalForward, RemoteForward
 from .keygen import generate_key, register_public_key
 from .sessionlog import SessionLog
+from .snippets import Snippet, SnippetStore, expand_snippet
 from .ssh_core import ConnectCancelled, SshSession
 from .terminal import TerminalWidget
 from .windowfit import fit_to_screen
@@ -1149,8 +1152,10 @@ class LauncherWindow(_SharedOps, QMainWindow):
                 "known_hosts": KnownHosts(),
                 "settings": Settings(),
                 "credentials": CredentialStore(),
+                "snippets": SnippetStore(),
             }
         self._services = services
+        self.snippets = services["snippets"]
         self.store = services["store"]
         self.known_hosts = services["known_hosts"]
         self.settings = services["settings"]
@@ -1283,6 +1288,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.known_hosts = services["known_hosts"]
         self.settings = services["settings"]
         self.credentials = services["credentials"]
+        self.snippets = services["snippets"]
         self._launcher = launcher
         self.profile = profile
         self.session_tab: SessionTab | None = None
@@ -1362,8 +1368,41 @@ class SessionWindow(_SharedOps, QMainWindow):
                               self._forget_credentials)
         self.m_sess.setEnabled(False)   # 接続完了までは無効
 
+        self.m_snippets = self.menuBar().addMenu("スニペット")
+        self.m_snippets.addAction("スニペットを管理…", self._manage_snippets)
+        self.m_snippets.addSeparator()
+        self.m_snippets.aboutToShow.connect(self._populate_snippets_menu)
+
         m_help = self.menuBar().addMenu("ヘルプ")
         m_help.addAction("Hashi について", self._about)
+
+    def _manage_snippets(self):
+        SnippetsManageDialog.manage(self, self.snippets)
+
+    def _populate_snippets_menu(self):
+        self.m_snippets.clear()
+        self.m_snippets.addAction("スニペットを管理…", self._manage_snippets)
+        self.m_snippets.addSeparator()
+        if not self.snippets.snippets:
+            act = self.m_snippets.addAction("スニペットがありません")
+            act.setEnabled(False)
+            return
+        for snippet in self.snippets.snippets:
+            act = self.m_snippets.addAction(snippet.name)
+            act.triggered.connect(lambda checked, s=snippet: self._send_snippet(s))
+
+    def _send_snippet(self, snippet: Snippet):
+        if self.session_tab is None:
+            QMessageBox.information(
+                self, "スニペット", "接続中のみスニペットを送信できます。")
+            return
+        values = SnippetVariablesDialog.ask(self, snippet.body)
+        if values is None:
+            return
+        body = expand_snippet(snippet.body, values)
+        if snippet.send_enter:
+            body += "\n"
+        self.session_tab.terminal.send_text(body)
 
     def _refresh_profile_lists(self):
         if self._launcher is not None:
@@ -1403,6 +1442,7 @@ class SessionWindow(_SharedOps, QMainWindow):
             ctx.note_login_password(worker.used_password)
         tab = SessionTab(session, self.settings, ctx)
         self.session_tab = tab
+        tab.terminal.set_snippet_store(self.snippets)
         self.setCentralWidget(tab)
         self._connecting = None
         self.m_sess.setEnabled(True)
