@@ -39,12 +39,14 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QStyle,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from . import style
 from .dialogs import DoubleCheckDialog
 from .editor import EditorWindow
 from .permjournal import PermJournal
@@ -828,7 +830,7 @@ class SftpBrowser(QWidget):
 
         # 既定の権限無視状態を反映
         if settings and settings.get("permission_override"):
-            self.btn_override.setChecked(True)
+            self._act_override.setChecked(True)
         self.nav.enqueue({"kind": "init", "initial": initial_path})
 
     # ---- UI 構築 ---------------------------------------------------------
@@ -837,71 +839,68 @@ class SftpBrowser(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        bar = QHBoxLayout()
-        style = self.style()
+        qstyle = self.style()
 
-        def tool(text, tip, slot, icon=None):
-            b = QPushButton(text)
+        def icon_button(tip, slot, icon):
+            b = QPushButton()
             b.setToolTip(tip)
-            b.setFixedWidth(34 if len(text) <= 2 else 110)
-            if icon:
-                b.setIcon(style.standardIcon(icon))
-                b.setText(text if len(text) > 2 else "")
-                b.setFixedWidth(34 if len(text) <= 2 else 120)
+            b.setIcon(qstyle.standardIcon(icon))
+            b.setFixedWidth(34)
             b.clicked.connect(slot)
-            bar.addWidget(b)
             return b
 
-        tool("↑", "1つ上のフォルダへ (Backspace)", self.go_up, QStyle.SP_ArrowUp)
-        tool("H", "ホームへ", self.go_home, QStyle.SP_DirHomeIcon)
-        tool("R", "最新の状態に更新 (F5)", self.refresh, QStyle.SP_BrowserReload)
+        bar = QHBoxLayout()
+        bar.setSpacing(4)
+        bar.addWidget(icon_button("1つ上のフォルダへ (Backspace)", self.go_up, QStyle.SP_ArrowUp))
+        bar.addWidget(icon_button("最新の状態に更新 (F5)", self.refresh, QStyle.SP_BrowserReload))
 
         self.ed_path = QLineEdit()
         self.ed_path.setPlaceholderText("リモートパス")
         self.ed_path.returnPressed.connect(self._path_entered)
         bar.addWidget(self.ed_path, 1)
 
-        self.btn_hidden = QPushButton("隠しファイル")
-        self.btn_hidden.setCheckable(True)
-        self.btn_hidden.setToolTip("ドットファイルの表示/非表示")
-        self.btn_hidden.toggled.connect(self._toggle_hidden)
-        bar.addWidget(self.btn_hidden)
-        root.addLayout(bar)
-
-        bar2 = QHBoxLayout()
         b_up = QPushButton("アップロード…")
         b_up.setToolTip("ローカルのファイルを選んで現在のフォルダへ送る (D&D でも可)")
         b_up.clicked.connect(self._pick_upload)
-        b_dl = QPushButton("ダウンロード")
-        b_dl.setToolTip("選択した項目をローカルへ保存")
-        b_dl.clicked.connect(self.download_selected)
-        b_new = QPushButton("新規フォルダ")
-        b_new.clicked.connect(self.make_dir)
-        b_del = QPushButton("削除")
-        b_del.setToolTip("選択した項目を削除 (2段階確認あり)")
-        b_del.clicked.connect(self.delete_selected)
-        for b in (b_up, b_dl, b_new, b_del):
-            bar2.addWidget(b)
-        bar2.addStretch(1)
+        bar.addWidget(b_up)
 
-        self.btn_override = QPushButton("🔓 権限無視")
-        self.btn_override.setCheckable(True)
-        self.btn_override.setToolTip(
+        # その他操作はプルダウンメニューへ集約(幅を縮められるように)
+        self.btn_more = QToolButton()
+        self.btn_more.setText("その他")
+        self.btn_more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self)
+
+        self._act_home = menu.addAction("ホームへ")
+        self._act_home.setToolTip("ホームディレクトリへ移動")
+        self._act_home.triggered.connect(self.go_home)
+
+        menu.addSeparator()
+
+        self._act_hidden = menu.addAction("隠しファイル")
+        self._act_hidden.setCheckable(True)
+        self._act_hidden.setToolTip("ドットファイルの表示/非表示")
+        self._act_hidden.toggled.connect(self._toggle_hidden)
+
+        self._act_override = menu.addAction("🔓 権限無視")
+        self._act_override.setCheckable(True)
+        self._act_override.setToolTip(
             "ON にすると、権限で弾かれたファイルを一時的に読み書き可能にして\n"
             "操作し、終わったら即座に元の権限へ戻します。\n"
             "自分が所有者でなければ sudo でパスワードを使って変更します。"
         )
-        self.btn_override.toggled.connect(self._toggle_override)
-        self.btn_override.setStyleSheet(
-            "QPushButton:checked { background:#7a3b3b; font-weight:bold; }")
-        bar2.addWidget(self.btn_override)
+        self._act_override.toggled.connect(self._toggle_override)
 
-        self.btn_queue = QPushButton("転送キュー")
-        self.btn_queue.setCheckable(True)
-        self.btn_queue.setToolTip("転送ジョブの一覧 (待機/実行/完了/失敗) を表示")
-        self.btn_queue.toggled.connect(self._toggle_queue_panel)
-        bar2.addWidget(self.btn_queue)
-        root.addLayout(bar2)
+        menu.addSeparator()
+
+        self._act_queue = menu.addAction("転送キューを表示")
+        self._act_queue.setCheckable(True)
+        self._act_queue.setToolTip("転送ジョブの一覧 (待機/実行/完了/失敗) を表示")
+        self._act_queue.toggled.connect(self._toggle_queue_panel)
+
+        self.btn_more.setMenu(menu)
+        bar.addWidget(self.btn_more)
+        root.addLayout(bar)
 
         # 転送キューの台帳と一覧パネル
         self.queue = TransferQueue(self)
@@ -925,6 +924,7 @@ class SftpBrowser(QWidget):
         self.tree.setColumnWidth(0, 260)
         self.tree.setColumnWidth(1, 90)
         self.tree.setColumnWidth(2, 130)
+        self.tree.setMinimumWidth(120)
         root.addWidget(self.tree, 1)
 
         # 進捗パネル
@@ -943,12 +943,27 @@ class SftpBrowser(QWidget):
         self.progress_frame.hide()
         root.addWidget(self.progress_frame)
 
+        # ステータス + 転送キュー状態(常に文字で表示)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(4)
+
         self.lb_status = QLabel("接続中…")
-        self.lb_status.setStyleSheet("color:#8a919e;")
-        root.addWidget(self.lb_status)
+        self.lb_status.setStyleSheet(f"color:{style.FG_MUTED};")
+        bottom.addWidget(self.lb_status, 1)
+
+        self._btn_queue = QPushButton("転送キュー")
+        self._btn_queue.setToolTip("転送ジョブの一覧を表示/隠す")
+        self._btn_queue.setFixedWidth(180)
+        self._btn_queue.setStyleSheet("text-align:left; padding-left:4px;")
+        self._btn_queue.clicked.connect(self._on_queue_button_clicked)
+        bottom.addWidget(self._btn_queue)
+        root.addLayout(bottom)
+
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
         self._status_timer.timeout.connect(lambda: self.lb_status.setText(""))
+
+        self.queue.changed.connect(self._update_queue_button)
 
         QShortcut(QKeySequence(Qt.Key_F5), self, self.refresh)
         QShortcut(QKeySequence(Qt.Key_Delete), self.tree, self.delete_selected)
@@ -958,6 +973,45 @@ class SftpBrowser(QWidget):
     # ---- 転送キュー ---------------------------------------------------------
     def _toggle_queue_panel(self, on: bool):
         self.queue_panel.setVisible(on)
+        if self._act_queue.isChecked() != on:
+            self._act_queue.blockSignals(True)
+            self._act_queue.setChecked(on)
+            self._act_queue.blockSignals(False)
+        self._update_queue_button()
+
+    def _on_queue_button_clicked(self):
+        self._toggle_queue_panel(not self.queue_panel.isVisible())
+
+    def _update_queue_button(self):
+        text = self._queue_status_text()
+        if self.queue_panel.isVisible():
+            text = "▼ " + text
+        else:
+            text = "▶ " + text
+        self._btn_queue.setText(text)
+
+    def _queue_status_text(self) -> str:
+        running = self.queue.running_job()
+        if running is not None:
+            if running.total > 0:
+                pct = min(100, int(running.done * 100 / running.total))
+            else:
+                pct = 0
+            kind_mark = {"upload": "↑", "download": "↓", "delete": "×"}.get(running.kind, running.kind)
+            label = running.label
+            if len(label) > 12:
+                label = label[:11] + "…"
+            return f"{kind_mark} {label} {pct}%"
+        counts: dict[str, int] = {}
+        for job in self.queue.jobs():
+            counts[job.state] = counts.get(job.state, 0) + 1
+        if counts.get("waiting"):
+            return f"待機 {counts['waiting']}件"
+        if counts.get("failed"):
+            return f"失敗 {counts['failed']}件"
+        if counts.get("done"):
+            return f"完了 {counts['done']}件"
+        return "転送キュー"
 
     def _enqueue_xfer(self, kind: str, payload: dict, label: str):
         """転送系ジョブを台帳に登録してから xfer へ投入する。"""
@@ -1053,6 +1107,10 @@ class SftpBrowser(QWidget):
 
     def _toggle_hidden(self, on: bool):
         self._show_hidden = on
+        if self._act_hidden.isChecked() != on:
+            self._act_hidden.blockSignals(True)
+            self._act_hidden.setChecked(on)
+            self._act_hidden.blockSignals(False)
         self._render()
 
     def _toggle_override(self, on: bool):
@@ -1072,6 +1130,16 @@ class SftpBrowser(QWidget):
             self.nav.enqueue({"kind": "perm_recover"})
         if self.settings:
             self.settings.set("permission_override", on)
+        if self._act_override.isChecked() != on:
+            self._act_override.blockSignals(True)
+            self._act_override.setChecked(on)
+            self._act_override.blockSignals(False)
+        # メニューボタンの背景色で ON 状態を視覚的に饒示
+        if on:
+            self.btn_more.setStyleSheet(
+                f"QToolButton {{ background-color:{style.DANGER_BG}; font-weight:bold; }}")
+        else:
+            self.btn_more.setStyleSheet("")
 
     def _selected_entries(self) -> list[dict]:
         return [it.data(0, Qt.UserRole + 2) for it in self.tree.selectedItems()]
