@@ -25,10 +25,12 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
+    QUrl,
     Signal,
 )
 from PySide6.QtGui import (
     QColor,
+    QDesktopServices,
     QFont,
     QFontMetricsF,
     QGuiApplication,
@@ -89,6 +91,14 @@ def resolve_color(name, default: QColor) -> QColor:
     c = QColor(hexval) if hexval else default
     _color_cache[name] = c
     return c
+
+
+# URL 検出 (第一弾: 行内 http/https。行折返しは未対応)
+_URL_RE = re.compile(
+    r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+    re.IGNORECASE,
+)
+_URL_TRIM_CHARS = ".,;:!?"
 
 
 class _ChannelBridge(QObject):
@@ -279,6 +289,7 @@ class TerminalWidget(QWidget):
         self._last_title = ""
         self._right_click_paste = right_click_paste
         self._snippet_store = None  # 右クリックメニューのスニペット用
+        self._url_cache: dict[int, tuple[tuple[str, ...], list[tuple[int, int, str]]]] = {}
         self._last_pw_prompt = ""  # 直近に通知したプロンプト(重複通知防止)
         self._session_log = None  # SessionLog (受信出力の自動保存)
 
@@ -308,6 +319,7 @@ class TerminalWidget(QWidget):
         self._c_sel = QColor(t["selection"])
         self._ansi = {k: QColor(v) for k, v in t["ansi"].items()}
         self._theme_cache: dict[str, QColor] = {}
+        self._c_link = self._resolve("blue", self._c_fg)
         self._dirty = True
         self.update()
 
@@ -346,6 +358,63 @@ class TerminalWidget(QWidget):
 
     def font_size(self) -> int:
         return self._font_size
+
+    def _parse_urls(self, row: int) -> list[tuple[int, int, str]]:
+        """指定行のテキストから URL 範囲を返す (start_col, end_col, url)。"""
+
+        def make_key():
+            line = self.screen.buffer[row]
+            return tuple(line[c].data for c in range(self._cols))
+
+        line = self.screen.buffer[row]
+        cached = self._url_cache.get(row)
+        key = make_key()
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        chars: list[str] = []
+        start_col: list[int] = []
+        end_col: list[int] = []
+        col = 0
+        try:
+            while col < self._cols:
+                ch = line[col]
+                if ch.data:
+                    chars.append(ch.data)
+                    start_col.append(col)
+                    ww = wcwidth(ch.data)
+                    if ww and ww > 1:
+                        col += ww
+                    else:
+                        col += 1
+                    end_col.append(col)
+                else:
+                    col += 1
+        except Exception:
+            logger.debug("URL 検出中の行アクセスに失敗", exc_info=True)
+            return []
+
+        s = "".join(chars)
+        ranges: list[tuple[int, int, str]] = []
+        for m in _URL_RE.finditer(s):
+            start_str, end_str = m.start(), m.end()
+            while end_str > start_str and s[end_str - 1] in _URL_TRIM_CHARS:
+                end_str -= 1
+            if end_str <= start_str:
+                continue
+            sc = start_col[start_str]
+            ec = end_col[end_str - 1]
+            ranges.append((sc, ec, s[start_str:end_str]))
+
+        self._url_cache[row] = (key, ranges)
+        return ranges
+
+    def _url_at(self, row: int, col: int) -> str | None:
+        """指定セルが URL に含まれる場合、その URL 文字列を返す。"""
+        for sc, ec, url in self._parse_urls(row):
+            if sc <= col < ec:
+                return url
+        return None
 
     def set_session_log(self, log):
         """受信出力の追記ログを設定/解除する。"""
@@ -481,6 +550,7 @@ class TerminalWidget(QWidget):
             self.screen.ensure_hbounds()
             self.screen.ensure_vbounds()
             self._cols, self._rows = cols, rows
+            self._url_cache.clear()
             if self._channel is not None and not self._closed:
                 try:
                     self._channel.resize_pty(width=cols, height=rows)
@@ -665,6 +735,13 @@ class TerminalWidget(QWidget):
 
     def mousePressEvent(self, ev):
         self.setFocus()
+        if ev.button() == Qt.LeftButton and (ev.modifiers() & Qt.ControlModifier):
+            row, col = self._cell_at(ev.position().toPoint())
+            url = self._url_at(row, col)
+            if url:
+                QDesktopServices.openUrl(QUrl(url, QUrl.ParsingMode.TolerantMode))
+                ev.accept()
+                return
         if self._mouse_report_active(ev.modifiers()) \
                 and ev.button() in self._QT_MOUSE_BTN:
             self._mouse_pressed_code = (self._QT_MOUSE_BTN[ev.button()]
@@ -685,6 +762,14 @@ class TerminalWidget(QWidget):
                 self.paste_clipboard()
 
     def mouseMoveEvent(self, ev):
+        if ev.modifiers() & Qt.ControlModifier:
+            row, col = self._cell_at(ev.position().toPoint())
+            if self._url_at(row, col):
+                self.setCursor(Qt.PointingHandCursor)
+                return
+            self.setCursor(Qt.IBeamCursor)
+        elif not (ev.buttons() & Qt.LeftButton):
+            self.setCursor(Qt.IBeamCursor)
         tracking = getattr(self.screen, "mouse_tracking", 0)
         if self._mouse_report_active(ev.modifiers()) and tracking >= 1002:
             pressed = getattr(self, "_mouse_pressed_code", None)
@@ -814,6 +899,10 @@ class TerminalWidget(QWidget):
 
         for row in range(self._rows):
             line = buffer[row]
+            url_ranges = self._parse_urls(row)
+            url_cells = set()
+            for sc, ec, _ in url_ranges:
+                url_cells.update(range(sc, ec))
             y = row * chh
             col = 0
             while col < self._cols:
@@ -828,6 +917,9 @@ class TerminalWidget(QWidget):
                 bg = self._resolve(ch.bg, self._c_bg)
                 if getattr(ch, "reverse", False):
                     fg, bg = bg, fg
+                is_url = col in url_cells
+                if is_url:
+                    fg = self._c_link
                 in_sel = sel is not None and sel[0] <= row * self._cols + col <= sel[1]
                 if in_sel:
                     bg = self._c_sel
@@ -838,7 +930,7 @@ class TerminalWidget(QWidget):
                     p.setPen(fg)
                     p.setFont(self._font_bold if ch.bold else self._font)
                     p.drawText(cell, Qt.AlignLeft | Qt.AlignVCenter, data)
-                    if getattr(ch, "underscore", False):
+                    if getattr(ch, "underscore", False) or is_url:
                         p.drawLine(
                             int(cell.left()), int(cell.bottom() - 1),
                             int(cell.right()), int(cell.bottom() - 1),
