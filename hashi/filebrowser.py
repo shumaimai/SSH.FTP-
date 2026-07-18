@@ -46,11 +46,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import style
-from .dialogs import DoubleCheckDialog
+from . import fileactions, style
+from .dialogs import DoubleCheckDialog, SnippetVariablesDialog
 from .editor import EditorWindow
 from .permjournal import PermJournal
 from .privilege import OverrideError, PermManager
+from .snippets import expand_snippet
 from .transferqueue import TransferQueue, TransferQueuePanel
 
 logger = logging.getLogger(__name__)
@@ -1547,6 +1548,15 @@ class SftpBrowser(QWidget):
         a_edit.setEnabled(one_file)
         a_open = menu.addAction("関連付けアプリで開く")
         a_open.setEnabled(one_file)
+        # ファイル種別ごとの「実行」サブメニュー(Issue #98)。
+        # コマンドはターミナルへ入力するだけで、Enter は人間が押す
+        run_map: dict[object, fileactions.FileAction] = {}
+        if one_file and not sel[0].get("is_dir"):
+            acts = fileactions.actions_for(sel[0]["name"])
+            if acts:
+                m_run = menu.addMenu("実行")
+                for act in acts:
+                    run_map[m_run.addAction(act.label)] = act
         menu.addSeparator()
         a_dl = menu.addAction("ダウンロード")
         a_ren = menu.addAction("名前の変更 (F2)")
@@ -1576,6 +1586,9 @@ class SftpBrowser(QWidget):
             self.xfer.enqueue({"kind": "open_temp",
                                "remote": posixpath.join(self.cwd, sel[0]["name"]),
                                "size": sel[0]["size"] or 0})
+        elif chosen in run_map:
+            self._run_file_action(
+                run_map[chosen], posixpath.join(self.cwd, sel[0]["name"]))
         elif chosen is a_dl:
             self.download_selected()
         elif chosen is a_ren:
@@ -1597,6 +1610,21 @@ class SftpBrowser(QWidget):
             self._send_terminal_path(newline=True)
         elif chosen is a_insert:
             self._send_terminal_path(newline=False)
+
+    def _run_file_action(self, action, remote_path: str):
+        """「実行」メニューのコマンドをターミナルへ入力する(Issue #98)。
+
+        自動実行はしない(Enter は人間)。{{tag}} など未解決の変数が
+        残っていれば、スニペットと同じ変数入力ダイアログで埋める。
+        """
+        cmd, missing = fileactions.build_command(action, remote_path)
+        if missing:
+            values = SnippetVariablesDialog.ask(self, cmd)
+            if values is None:
+                return
+            cmd = expand_snippet(cmd, values)
+        self.terminal_input.emit(cmd)
+        self._on_status("コマンドをターミナルへ入力しました (Enter で実行)")
 
     # ---- 進捗/ステータス ----------------------------------------------------------
     def _on_progress(self, info: dict):

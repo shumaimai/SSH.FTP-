@@ -3,6 +3,15 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+### 追加
+- **ファイルの「実行」メニュー(Issue #98、`hashi/fileactions.py`)**。SFTP ブラウザで
+  ファイルを右クリック →「実行」から、種類に応じたコマンドを選べる:
+  docker-compose(起動/停止/状態/ログ)、Dockerfile(ビルド)、.py / .sh / .jar の実行、
+  .service の systemctl 操作、Makefile / package.json / requirements.txt、
+  tar / zip の展開など。**コマンドはターミナルへ入力されるだけで、実行(Enter)は
+  必ず人間が押す**(スニペットと同じ安全思想)。パスはシェルクォート済み、
+  `{{tag}}` などの追加変数は入力ダイアログで指定。
+
 ### 修正
 - **ターミナルを縮めて入力行が折返した後に広げると、入力位置と表示が崩れる
   バグ(Issue #100、#96 実機報告の根本原因)**。pyte はリフロー(行の再折返し)
