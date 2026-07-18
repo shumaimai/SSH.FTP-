@@ -301,3 +301,115 @@ def test_sftp_worker_reconnect_swaps_session_and_sftp(qapp):
     assert worker.session is new
     assert worker.sftp is new.sftp
     assert old.sftp.closed is True
+
+
+def test_match_search_pattern(qapp):
+    from hashi.filebrowser import _match_search_pattern
+
+    assert _match_search_pattern("notes.txt", "notes")
+    assert _match_search_pattern("Notes.TXT", "NOTES")
+    assert _match_search_pattern("foo.py", "*.py")
+    assert _match_search_pattern("foo.py", "foo.?y")
+    assert not _match_search_pattern("foo.py", "bar")
+    assert _match_search_pattern("log", "*o*")  # ワイルドカードは fnmatch
+
+
+def test_search_job_uses_exec_when_available(qapp):
+    from hashi.filebrowser import SftpWorker
+
+    class Attr:
+        def __init__(self, name, mode, size=0, mtime=0):
+            self.filename = name
+            self.st_mode = mode
+            self.st_size = size
+            self.st_mtime = mtime
+
+    class FakeSftp:
+        def normalize(self, p):
+            return p
+
+        def stat(self, p):
+            if p == "/srv/notes.txt":
+                return Attr("notes.txt", 0o100644, 42, 1000)
+            raise IOError(2, "no such")
+
+    class FakeSession:
+        def __init__(self):
+            self.cmds = []
+
+        def exec_command(self, cmd, timeout=15.0):
+            self.cmds.append(cmd)
+            return (0, "/srv/notes.txt\x00", "")
+
+    sess = FakeSession()
+    worker = SftpWorker(sess, "nav")
+    worker.sftp = FakeSftp()
+    results = []
+    worker.search_result.connect(results.extend)
+
+    worker._job_search({"path": "/srv", "pattern": "notes", "subfolders": True})
+
+    assert len(results) == 1
+    assert results[0]["name"] == "notes.txt"
+    assert results[0]["size"] == 42
+    assert "-iname" in sess.cmds[0]
+    assert "'*notes*'" in sess.cmds[0]
+
+
+def test_search_job_falls_back_to_sftp_walk(qapp):
+    from hashi.filebrowser import SftpWorker
+
+    class Attr:
+        def __init__(self, name, mode, size=0, mtime=0):
+            self.filename = name
+            self.st_mode = mode
+            self.st_size = size
+            self.st_mtime = mtime
+
+    tree = {
+        "/srv": [
+            Attr("notes.txt", 0o100644),
+            Attr("dir", 0o40755),
+        ],
+        "/srv/dir": [
+            Attr("deep.log", 0o100644, 99, 20),
+        ],
+    }
+
+    class FakeSftp:
+        def normalize(self, p):
+            return p
+
+        def listdir_attr(self, p):
+            return tree.get(p, [])
+
+    class FakeSession:
+        def exec_command(self, cmd, timeout=15.0):
+            return (1, "", "find: not found")
+
+    sess = FakeSession()
+    worker = SftpWorker(sess, "nav")
+    worker.sftp = FakeSftp()
+    results = []
+    worker.search_result.connect(results.extend)
+
+    worker._job_search({"path": "/srv", "pattern": "deep", "subfolders": True})
+
+    assert len(results) == 1
+    assert results[0]["name"] == "deep.log"
+    assert results[0]["path"] == "/srv/dir/deep.log"
+
+
+def test_search_dialog_returns_selected_path(qapp):
+    from hashi.filebrowser import _SearchResultDialog
+
+    results = [
+        {"path": "/srv/notes.txt", "name": "notes.txt",
+         "is_dir": False, "is_link": False, "size": 42,
+         "mtime": 1000, "mode_str": "-rw-r--r--"},
+    ]
+    dlg = _SearchResultDialog(None, results)
+    dlg.tree.setCurrentItem(dlg.tree.topLevelItem(0))
+    dlg._accept_current()
+    assert dlg.selected == "/srv/notes.txt"
+    assert dlg.selected_entry == results[0]

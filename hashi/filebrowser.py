@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import fnmatch
 import logging
 import ntpath
 import os
@@ -28,6 +29,9 @@ from PySide6.QtCore import QFileSystemWatcher, QObject, Qt, QThread, QTimer, QUr
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -58,6 +62,8 @@ logger = logging.getLogger(__name__)
 
 OPEN_SIZE_WARN = 50 * 1024 * 1024  # ダブルクリックで開く際の警告サイズ
 EDIT_SIZE_LIMIT = 8 * 1024 * 1024  # 内蔵エディタで開く上限
+SEARCH_MAX_RESULTS = 5000  # リモート検索の結果上限（DoS/メモリ対策）
+SEARCH_MAX_DEPTH = 30  # SFTP walk の再帰上限
 TEXT_EXTS = {
     "txt", "md", "markdown", "log", "conf", "cfg", "ini", "toml", "yaml", "yml",
     "json", "xml", "html", "htm", "css", "js", "jsx", "ts", "tsx", "py", "pyw",
@@ -106,6 +112,28 @@ def _safe_local_child(root: str, parent: str, name: str) -> str:
 def _quote_posix_shell_path(path: str) -> str:
     """POSIX シェルへ渡すパスを安全にクォートする。"""
     return "'" + path.replace("'", "'\\''") + "'"
+
+
+def _match_search_pattern(name: str, pattern: str) -> bool:
+    """検索パターン判定。 * ? を含まなければ部分一致、含めば fnmatch。 """
+    if not pattern:
+        return False
+    p = pattern.lower()
+    n = name.lower()
+    if "*" in pattern or "?" in pattern:
+        return fnmatch.fnmatch(n, p)
+    return p in n
+
+
+def _find_name_arg(pattern: str) -> str:
+    """find -iname 用のクォート済み引数。ワイルドカードが無ければ部分一致用に挟む。"""
+    if not pattern:
+        return _quote_posix_shell_path("*")
+    if "*" in pattern or "?" in pattern:
+        inner = pattern
+    else:
+        inner = f"*{pattern}*"
+    return _quote_posix_shell_path(inner)
 
 
 class _Cancelled(Exception):
@@ -242,6 +270,7 @@ class SftpWorker(QThread):
     """ジョブキュー方式の SFTP ワーカー。sftp チャネルはこのスレッド内で開く。"""
 
     listed = Signal(str, list)          # path, entries
+    search_result = Signal(list)        # リモート検索結果
     home_resolved = Signal(str)
     precheck_result = Signal(object)    # plan dict + conflicts
     progress = Signal(object)           # {"label","done","total"}
@@ -736,6 +765,112 @@ class SftpWorker(QThread):
         except (OverrideError, IOError, OSError) as e:
             self.external_save_result.emit(remote, local, False, str(e))
 
+    def _job_search(self, job):
+        """リモートファイル検索 (Issue #102)。
+
+        1. exec 可能なら `find` を使う（高速）。
+        2. 失敗/使えなければ SFTP walk で自前探索（深さ・件数上限・キャンセル対応）。
+        """
+        base = self.sftp.normalize(job["path"])
+        pattern = job.get("pattern", "").strip()
+        subfolders = bool(job.get("subfolders"))
+        if not pattern:
+            self.search_result.emit([])
+            return
+
+        results: list[dict] = []
+
+        # ---- 1. exec (find) -------------------------------------------------
+        try:
+            depth_arg = "" if subfolders else "-maxdepth 1"
+            name_arg = _find_name_arg(pattern)
+            qdir = _quote_posix_shell_path(base)
+            cmd = f"find {qdir} {depth_arg} -iname {name_arg} -print0".strip()
+            rc, out, _err = self.session.exec_command(cmd, timeout=30.0)
+            if rc == 0:
+                for p in out.split("\0"):
+                    if not p:
+                        continue
+                    self._check_cancel()
+                    entry = self._stat_to_search_entry(p)
+                    if entry:
+                        results.append(entry)
+                    if len(results) >= SEARCH_MAX_RESULTS:
+                        break
+                self.search_result.emit(results)
+                self.status.emit(
+                    f"検索結果 {len(results)} 件"
+                    f"{' (表示上限に達しました)' if len(results) >= SEARCH_MAX_RESULTS else ' (find)'}"
+                )
+                return
+        except Exception as e:
+            logger.debug("exec による検索に失敗、SFTP walk に移行: %s", e, exc_info=True)
+
+        # ---- 2. SFTP walk fallback ------------------------------------------
+        self.status.emit("SFTP で検索中…")
+        self._search_sftp_walk(base, pattern, subfolders, results, depth=0)
+        self.search_result.emit(results)
+        self.status.emit(
+            f"検索結果 {len(results)} 件"
+            f"{' (表示上限に達しました)' if len(results) >= SEARCH_MAX_RESULTS else ''}"
+        )
+
+    def _stat_to_search_entry(self, path: str) -> dict | None:
+        """パスから検索結果エントリを作る。stat -> lstat とフォールバック。"""
+        attr = None
+        try:
+            attr = self.sftp.stat(path)
+        except Exception:
+            try:
+                attr = self.sftp.lstat(path)
+            except Exception:
+                pass
+        if attr is None:
+            attr = type("obj", (object,), {
+                "st_mode": 0, "st_size": 0, "st_mtime": 0,
+            })()
+        mode = attr.st_mode or 0
+        return {
+            "path": path,
+            "name": posixpath.basename(path),
+            "is_dir": statmod.S_ISDIR(mode),
+            "is_link": statmod.S_ISLNK(mode),
+            "size": attr.st_size or 0,
+            "mtime": attr.st_mtime or 0,
+            "mode_str": statmod.filemode(mode),
+        }
+
+    def _search_sftp_walk(self, base: str, pattern: str, subfolders: bool,
+                          out: list, depth: int):
+        """SFTP 一覧を再帰的に走査し、パターンに合致するエントリを集める。"""
+        if depth > SEARCH_MAX_DEPTH:
+            return
+        try:
+            entries = self._listdir_ov(base)
+        except Exception:
+            return
+        for attr in entries:
+            self._check_cancel()
+            name = attr.filename
+            mode = attr.st_mode or 0
+            is_dir = statmod.S_ISDIR(mode) and not statmod.S_ISLNK(mode)
+            if _match_search_pattern(name, pattern):
+                out.append({
+                    "path": posixpath.join(base, name),
+                    "name": name,
+                    "is_dir": is_dir,
+                    "is_link": statmod.S_ISLNK(mode),
+                    "size": attr.st_size or 0,
+                    "mtime": attr.st_mtime or 0,
+                    "mode_str": statmod.filemode(mode),
+                })
+                if len(out) >= SEARCH_MAX_RESULTS:
+                    return
+            if subfolders and is_dir:
+                self._search_sftp_walk(
+                    posixpath.join(base, name), pattern, subfolders, out, depth + 1
+                )
+
 
 class _SortItem(QTreeWidgetItem):
     """フォルダ優先 + 列ごとのソートキーで比較する項目。"""
@@ -788,6 +923,75 @@ class _DropTree(QTreeWidget):
             ev.acceptProposedAction()
 
 
+class _SearchResultDialog(QDialog):
+    """リモートファイル検索の結果一覧ダイアログ。"""
+
+    def __init__(self, parent, results: list[dict]):
+        super().__init__(parent)
+        self.setWindowTitle("リモートファイル検索 結果")
+        self.resize(780, 460)
+        self.selected: str | None = None
+        self.selected_entry: dict | None = None
+        self._build_ui(results)
+
+    def _build_ui(self, results: list[dict]):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(style.SPACING)
+        layout.setContentsMargins(style.SPACING, style.SPACING,
+                                  style.SPACING, style.SPACING)
+
+        hint = style.muted_label("ダブルクリックまたは OK で該当フォルダへ移動します")
+        layout.addWidget(hint)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["名前", "パス", "サイズ", "更新日時"])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setSortingEnabled(True)
+        self.tree.setColumnWidth(0, 160)
+        self.tree.setColumnWidth(1, 380)
+        self.tree.setColumnWidth(2, 80)
+        self.tree.setColumnWidth(3, 130)
+
+        qstyle = self.style()
+        icon_dir = qstyle.standardIcon(QStyle.SP_DirIcon)
+        icon_file = qstyle.standardIcon(QStyle.SP_FileIcon)
+        icon_link = qstyle.standardIcon(QStyle.SP_FileLinkIcon)
+
+        for r in results:
+            item = QTreeWidgetItem([
+                r["name"],
+                r["path"],
+                "" if r["is_dir"] else human_size(r["size"]),
+                fmt_mtime(r["mtime"]),
+            ])
+            if r["is_dir"]:
+                item.setIcon(0, icon_dir)
+            elif r.get("is_link"):
+                item.setIcon(0, icon_link)
+            else:
+                item.setIcon(0, icon_file)
+            item.setData(0, Qt.UserRole, r)
+            item.setTextAlignment(2, Qt.AlignRight | Qt.AlignVCenter)
+            self.tree.addTopLevelItem(item)
+
+        self.tree.itemDoubleClicked.connect(self._accept_current)
+        layout.addWidget(self.tree, 1)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._accept_current)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _accept_current(self, _item=None):
+        item = self.tree.currentItem()
+        if item is None:
+            item = self.tree.topLevelItem(0)
+        if item is not None:
+            self.selected_entry = item.data(0, Qt.UserRole)
+            self.selected = self.selected_entry["path"]
+        self.accept()
+
+
 class SftpBrowser(QWidget):
     """SFTP ブラウザ本体。"""
 
@@ -807,6 +1011,7 @@ class SftpBrowser(QWidget):
         self.home = ""
         self._entries: list[dict] = []
         self._show_hidden = False
+        self._pending_select: str | None = None       # cd 後に選択する名前
         self._editors: dict[str, EditorWindow] = {}   # remote -> window
         self._edit_saves: dict[str, object] = {}       # remote -> done_cb
         self._external_monitor = ExternalFileMonitor(self)
@@ -827,6 +1032,7 @@ class SftpBrowser(QWidget):
             w.status.connect(self._on_status)
             w.worker_failed.connect(self._on_worker_failed)
         self.nav.listed.connect(self._on_listed)
+        self.nav.search_result.connect(self._on_search_result)
         self.nav.home_resolved.connect(self._on_home)
         self.nav.precheck_result.connect(self._on_precheck)
         self.nav.job_done.connect(self._on_job_done)
@@ -856,6 +1062,40 @@ class SftpBrowser(QWidget):
         self.nav.enqueue({"kind": "init", "initial": initial_path})
 
     # ---- UI 構築 ---------------------------------------------------------
+    def _build_search_bar(self, root):
+        self.search_frame = QFrame()
+        sf = QHBoxLayout(self.search_frame)
+        sf.setSpacing(style.SPACING)
+        sf.setContentsMargins(style.SPACING // 2, 2, style.SPACING // 2, 2)
+
+        lbl = QLabel("検索:")
+        self.ed_search = QLineEdit()
+        self.ed_search.setPlaceholderText("名前を入力 ( * ? ワイルドカード可 )")
+        self.ed_search.returnPressed.connect(self._start_search)
+
+        self.chk_search_subfolders = QCheckBox("サブフォルダも含む")
+        self.chk_search_subfolders.setChecked(True)
+
+        btn_search = QPushButton("検索")
+        btn_search.clicked.connect(self._start_search)
+
+        btn_clear = QPushButton("クリア")
+        btn_clear.clicked.connect(self._clear_search)
+
+        btn_close = QToolButton()
+        btn_close.setText("×")
+        btn_close.setToolTip("検索バーを閉じる")
+        btn_close.clicked.connect(self._close_search_bar)
+
+        sf.addWidget(lbl)
+        sf.addWidget(self.ed_search, 1)
+        sf.addWidget(self.chk_search_subfolders)
+        sf.addWidget(btn_search)
+        sf.addWidget(btn_clear)
+        sf.addWidget(btn_close)
+        self.search_frame.hide()
+        root.addWidget(self.search_frame)
+
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
@@ -899,6 +1139,10 @@ class SftpBrowser(QWidget):
         self._act_home.setToolTip("ホームディレクトリへ移動")
         self._act_home.triggered.connect(self.go_home)
 
+        self._act_search = menu.addAction("検索 (Ctrl+F)")
+        self._act_search.setToolTip("リモートファイル検索バーを表示")
+        self._act_search.triggered.connect(self._toggle_search_bar)
+
         menu.addSeparator()
 
         self._act_hidden = menu.addAction("隠しファイル")
@@ -925,6 +1169,9 @@ class SftpBrowser(QWidget):
         self.btn_more.setMenu(menu)
         bar.addWidget(self.btn_more)
         root.addLayout(bar)
+
+        # リモートファイル検索バー (Ctrl+F で表示)
+        self._build_search_bar(root)
 
         # 転送キューの台帳と一覧パネル
         self.queue = TransferQueue(self)
@@ -999,6 +1246,10 @@ class SftpBrowser(QWidget):
                           (Qt.Key_Backspace, self.go_up)):
             sc = QShortcut(QKeySequence(key), self.tree, slot)
             sc.setContext(Qt.WidgetWithChildrenShortcut)
+
+        sc_search = QShortcut(QKeySequence("Ctrl+F"), self, self._toggle_search_bar,
+                              None, Qt.WidgetWithChildrenShortcut)
+        sc_search.setContext(Qt.WidgetWithChildrenShortcut)
 
     # ---- 転送キュー ---------------------------------------------------------
     def _toggle_queue_panel(self, on: bool):
@@ -1086,6 +1337,66 @@ class SftpBrowser(QWidget):
         self._entries = entries
         self.ed_path.setText(path)
         self._render()
+        if self._pending_select:
+            self._select_by_name(self._pending_select)
+            self._pending_select = None
+
+    def _toggle_search_bar(self):
+        self.search_frame.setVisible(not self.search_frame.isVisible())
+        if self.search_frame.isVisible():
+            self.ed_search.setFocus()
+            self.ed_search.selectAll()
+
+    def _close_search_bar(self):
+        self.search_frame.hide()
+        self.tree.setFocus()
+
+    def _clear_search(self):
+        self.ed_search.clear()
+        self.ed_search.setFocus()
+
+    def _start_search(self):
+        pattern = self.ed_search.text().strip()
+        if not pattern:
+            return
+        if not self.cwd:
+            return
+        self._pending_select = None
+        self.nav.enqueue({
+            "kind": "search",
+            "path": self.cwd,
+            "pattern": pattern,
+            "subfolders": self.chk_search_subfolders.isChecked(),
+        })
+        self._on_status("検索中…")
+
+    def _on_search_result(self, results: list):
+        if not results:
+            self._on_status("該当するファイルが見つかりませんでした")
+            QMessageBox.information(self, "検索結果",
+                                    "該当するファイルが見つかりませんでした。")
+            return
+        dlg = _SearchResultDialog(self, results)
+        if dlg.exec() != QDialog.Accepted or not dlg.selected:
+            return
+        entry = dlg.selected_entry or {}
+        path = dlg.selected
+        if entry.get("is_dir"):
+            target_dir = path
+            select_name = entry.get("name", "")
+        else:
+            target_dir = posixpath.dirname(path)
+            select_name = entry.get("name", "")
+        self._pending_select = select_name
+        self.cd(target_dir)
+
+    def _select_by_name(self, name: str):
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item.text(0) == name:
+                self.tree.setCurrentItem(item)
+                self.tree.scrollToItem(item)
+                break
 
     def _render(self):
         self.tree.setSortingEnabled(False)
