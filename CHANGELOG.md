@@ -3,6 +3,8 @@
 このプロジェクトは [Semantic Versioning](https://semver.org/lang/ja/) に緩く従います。
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-07-18
 ### 追加
 - **ファイルの「実行」メニュー(Issue #98、`hashi/fileactions.py`)**。SFTP ブラウザで
   ファイルを右クリック →「実行」から、種類に応じたコマンドを選べる:
@@ -287,7 +289,8 @@
 - 削除・上書きの 2 段階確認。
 - CLI 接続診断ツール `tools/doctor.py`。
 
-[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/shumaimai/Free-SSH_FTP/compare/v0.3.0...v0.4.0
