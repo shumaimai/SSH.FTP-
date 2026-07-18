@@ -67,11 +67,11 @@ def test_resize_scrolls_to_bottom_first(term):
 
 
 def test_resize_clamps_cursor_to_grid(term):
-    """幅縮小後もカーソルが新グリッド内に収まり、入力が表示される(#72)。
+    """幅縮小後もカーソルが新グリッド内に収まり、入力が表示される(#72/#100)。
 
-    pyte.HistoryScreen.resize は列数を減らした際にカーソル x を
-    新幅に追従させない。そのままでは次の文字が画面外に書き込まれ、
-    入力位置がずれて見える。
+    リフロー導入後は、80 文字の入力行が 40 列では 2 行に折返され、
+    カーソルはその続き(3 行目の先頭)に置かれる。次の入力は画面内の
+    正しい位置へ表示される。
     """
     term._pending_grid = (100, 30)
     term._apply_pending_grid()
@@ -84,5 +84,60 @@ def test_resize_clamps_cursor_to_grid(term):
     assert term.screen.columns == 40
     assert term.screen.cursor.x < 40
     term._on_data(b"Y")
-    assert "Y" in term.screen.display[0]
+    assert "Y" in term.screen.display[2]   # 折返しの続きに表示される
     assert term.screen.cursor.x <= 40
+
+
+def test_wrap_tracking_marks_continuation_rows(term):
+    """自動折返しで生まれた継続行を追跡する(#100)。"""
+    term._pending_grid = (40, 30)
+    term._apply_pending_grid()
+    term._on_data(b"A" * 100)   # 40 + 40 + 20 → 行 1, 2 が継続
+    assert term.screen.wrapped == {1, 2}
+    # 明示的な改行は折返しではない
+    term._on_data(b"\r\nB" * 1)
+    assert 3 not in term.screen.wrapped
+
+
+def test_reflow_grow_restores_single_logical_line(term):
+    """縮小で折返した入力行が、拡大時に 1 行へ戻る(#100 の再現ケース)。"""
+    term._pending_grid = (40, 30)
+    term._apply_pending_grid()
+    term._on_data(b"A" * 60)    # 40 + 20 に折返し
+    assert term.screen.cursor.y == 1 and term.screen.cursor.x == 20
+
+    term._pending_grid = (100, 30)
+    term._apply_pending_grid()
+    row0 = term.screen.display[0]
+    assert row0.startswith("A" * 60)
+    assert term.screen.cursor.y == 0 and term.screen.cursor.x == 60
+    assert term.screen.wrapped == set()
+    # 元の継続行は消えている
+    assert term.screen.display[1].strip() == ""
+
+
+def test_reflow_shrink_rewraps_cursor_line(term):
+    """拡大状態の長い入力行が、縮小時に正しく複数行へ折返される(#100)。"""
+    term._pending_grid = (100, 30)
+    term._apply_pending_grid()
+    term._on_data(b"B" * 80)
+
+    term._pending_grid = (40, 30)
+    term._apply_pending_grid()
+    assert term.screen.display[0] == "B" * 40
+    assert term.screen.display[1] == "B" * 40
+    assert term.screen.cursor.y == 2 and term.screen.cursor.x == 0
+    assert term.screen.wrapped == {1, 2}
+
+
+def test_reflow_skips_alt_screen(term):
+    """代替画面(vim 等)ではリフローしない(#100)。"""
+    term._pending_grid = (60, 30)
+    term._apply_pending_grid()
+    term._on_data(b"\x1b[?1049h")     # 代替画面へ
+    term._on_data(b"C" * 70)
+    term._pending_grid = (90, 30)
+    term._apply_pending_grid()        # 例外なく通ればよい(内容は維持)
+    assert term.screen.in_alt_screen
+    term._on_data(b"\x1b[?1049l")     # 復帰
+    assert not term.screen.in_alt_screen

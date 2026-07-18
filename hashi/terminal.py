@@ -151,6 +151,10 @@ class _TerminalScreen(pyte.HistoryScreen):
         self._main_buffer = None
         self._main_history = None
         self._saved_cursor = None
+        # 自動折返し(DECAWM)で生まれた「前行の継続」行の集合(Issue #100)。
+        # リサイズ時にカーソルの論理行を再折返しするために追跡する。
+        self.wrapped: set[int] = set()
+        self._in_draw = False
         super().__init__(*args, **kwargs)
 
     def reset(self):
@@ -161,7 +165,114 @@ class _TerminalScreen(pyte.HistoryScreen):
         self._main_buffer = None
         self._main_history = None
         self._saved_cursor = None
+        self.wrapped = set()
         super().reset()
+
+    # ---- 折返し行の追跡 (Issue #100) ---------------------------------------
+    def draw(self, data):
+        # draw 中の linefeed だけが「自動折返し」。明示的な LF と区別する
+        self._in_draw = True
+        try:
+            super().draw(data)
+        finally:
+            self._in_draw = False
+
+    def linefeed(self):
+        super().linefeed()
+        if self._in_draw:
+            self.wrapped.add(self.cursor.y)
+
+    def index(self):
+        bottom = self.margins.bottom if self.margins else self.lines - 1
+        scrolls = self.cursor.y == bottom
+        super().index()
+        if scrolls and self.wrapped:
+            self.wrapped = {y - 1 for y in self.wrapped if y >= 1}
+
+    def reverse_index(self):
+        top = self.margins.top if self.margins else 0
+        scrolls = self.cursor.y == top
+        super().reverse_index()
+        if scrolls and self.wrapped:
+            self.wrapped = {y + 1 for y in self.wrapped if y + 1 < self.lines}
+
+    def erase_in_display(self, how=0, *args, **kwargs):
+        super().erase_in_display(how, *args, **kwargs)
+        if how in (2, 3):
+            self.wrapped.clear()
+
+    # ---- リフロー第 1 段 (Issue #100): カーソルの論理行のみ ----------------
+    def resize(self, lines=None, columns=None):
+        """リサイズ時、カーソルがいる論理行(継続行含む)を新しい幅で
+        再折返しする。
+
+        pyte はリフロー非対応のため、シェル(readline)が「入力行は N 行に
+        折返している」前提で行うカーソル相対移動と画面の実態がずれ、
+        縮小→拡大で入力位置が崩れていた(実機 #96/#100)。全画面のリフローは
+        行わず、崩れの実害が出る入力行(カーソル行)だけを対象にする。
+        """
+        lines = lines or self.lines
+        columns = columns or self.columns
+        old_lines, old_cols = self.lines, self.columns
+        plan = None
+        if not self.in_alt_screen and columns != old_cols:
+            plan = self._extract_cursor_logical_line(old_cols)
+        super().resize(lines, columns)
+        if plan is None:
+            self.wrapped.clear()
+            return
+        cells, cursor_off, start, span = plan
+        # 行数が減った場合は上から切り詰められる(pyte 仕様)ので追従
+        start -= max(0, old_lines - lines)
+        self.wrapped.clear()
+        if start < 0:
+            return
+        self._relayout_cursor_line(cells, cursor_off, start, span)
+
+    def _extract_cursor_logical_line(self, old_cols):
+        """カーソルの論理行を (セル列, カーソルオフセット, 開始行, 行数) で返す。"""
+        start = min(self.cursor.y, self.lines - 1)
+        while start > 0 and start in self.wrapped:
+            start -= 1
+        end = min(self.cursor.y, self.lines - 1)
+        while (end + 1) in self.wrapped and end + 1 < self.lines:
+            end += 1
+        cells = []
+        cursor_off = 0
+        for y in range(start, end + 1):
+            row = self.buffer[y]
+            if y < end:
+                used = old_cols            # 継続がある行は幅いっぱい使っている
+            else:
+                used = 0
+                for x in range(old_cols - 1, -1, -1):
+                    ch = row[x]
+                    if ch.data and ch.data != " ":
+                        used = x + 1
+                        break
+                if y == self.cursor.y:
+                    used = max(used, min(self.cursor.x, old_cols))
+            if y == self.cursor.y:
+                cursor_off = len(cells) + min(self.cursor.x, old_cols)
+            for x in range(used):
+                cells.append(row[x])
+        return cells, cursor_off, start, end - start + 1
+
+    def _relayout_cursor_line(self, cells, cursor_off, start, old_span):
+        new_cols = self.columns
+        need = max(len(cells), cursor_off + 1)
+        rows_needed = max(1, -(-need // new_cols))
+        if start + rows_needed > self.lines:
+            return  # 収まらない稀ケースは何もしない(従来挙動 + clamp に任せる)
+        for y in range(start, min(start + max(old_span, rows_needed), self.lines)):
+            self.buffer.pop(y, None)
+        for i, cell in enumerate(cells):
+            self.buffer[start + i // new_cols][i % new_cols] = cell
+        for y in range(start + 1, start + rows_needed):
+            self.wrapped.add(y)
+        self.cursor.y = start + cursor_off // new_cols
+        self.cursor.x = cursor_off % new_cols
+        self.dirty.update(range(start, self.lines))
 
     def set_mode(self, *modes, private=False):
         if private and self._ALT_SCREEN_MODES.intersection(modes):
@@ -197,6 +308,8 @@ class _TerminalScreen(pyte.HistoryScreen):
             self._saved_cursor = (self.cursor.x, self.cursor.y)
         self._main_buffer = self.buffer
         self._main_history = self.history
+        self._main_wrapped = set(self.wrapped)
+        self.wrapped = set()
         self.buffer = defaultdict(self._main_buffer.default_factory)
         self.history = self.history._replace(
             top=deque(maxlen=self.history.size),
@@ -214,6 +327,8 @@ class _TerminalScreen(pyte.HistoryScreen):
             self.buffer = self._main_buffer
         if self._main_history is not None:
             self.history = self._main_history
+        self.wrapped = getattr(self, "_main_wrapped", set())
+        self._main_wrapped = set()
         self._main_buffer = None
         self._main_history = None
         self.dirty.update(range(self.lines))

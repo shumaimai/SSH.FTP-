@@ -79,6 +79,15 @@
 - GitHub Releases API からは `tag_name` / `html_url` のみを使い、**自動ダウンロード/自動更新はしない**。
 - `update_check` 設定で OFF にできる。
 
+### ターミナルのリフロー（`hashi/terminal.py`、Issue #100）
+
+- `_TerminalScreen.wrapped` は自動折返し(DECAWM)で生まれた継続行の集合。
+  **draw 中の linefeed だけをマークし、明示的な LF と混同しないこと。**
+  スクロール(`index`/`reverse_index`)時は集合も一緒にシフトすること。
+- リサイズ時のリフローは**カーソルの論理行のみ・メイン画面のみ**(代替画面 =
+  vim 等では行わない)。全画面リフローに拡張する場合も、既存の
+  「スクリーン/グリッド/PTY の 3 者一致」と失敗時の無変更を維持すること。
+
 ### ウィンドウ構成（`hashi/mainwindow.py`）
 
 - 起動画面は `LauncherWindow`（接続先選択）、接続すると常に `SessionWindow`（1 接続 =
