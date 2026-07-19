@@ -63,14 +63,14 @@ def test_roundtrip_without_secrets(env):
 def test_secrets_are_encrypted_and_roundtrip(env):
     store, kh, tmp = env
     p = _profile()
-    creds = FakeCredentials({f"{p.id_str()}:password": "pw1",
-                             f"{p.id_str()}:sudo": "su1"})
+    creds = FakeCredentials({f"{p.id_str()}:password": "pw1!平文",
+                             f"{p.id_str()}:sudo": "su1!平文"})
     path = tmp / "export.json"
     counts = export_bundle(path, [p], kh, creds, passphrase="corr3ct")
     assert counts["secrets"] == 2
 
     text = path.read_text(encoding="utf-8")
-    assert "pw1" not in text and "su1" not in text  # 平文は絶対に書かない
+    assert "pw1!平文" not in text and "su1!平文" not in text  # 平文は絶対に書かない
 
     bundle = load_bundle(path)
     assert bundle.has_encrypted_secrets
@@ -78,14 +78,14 @@ def test_secrets_are_encrypted_and_roundtrip(env):
     dst_creds = FakeCredentials()
     merged = merge_bundle(bundle, store, kh, dst_creds)
     assert merged["secrets"] == 2
-    assert dst_creds.get(p, "password") == "pw1"
-    assert dst_creds.get(p, "sudo") == "su1"
+    assert dst_creds.get(p, "password") == "pw1!平文"
+    assert dst_creds.get(p, "sudo") == "su1!平文"
 
 
 def test_wrong_passphrase_raises(env):
     store, kh, tmp = env
     p = _profile()
-    creds = FakeCredentials({f"{p.id_str()}:password": "pw1"})
+    creds = FakeCredentials({f"{p.id_str()}:password": "pw1!平文"})
     path = tmp / "export.json"
     export_bundle(path, [p], kh, creds, passphrase="right")
     bundle = load_bundle(path)
@@ -96,11 +96,11 @@ def test_wrong_passphrase_raises(env):
 def test_no_passphrase_means_no_secrets_even_with_credentials(env):
     _store, kh, tmp = env
     p = _profile()
-    creds = FakeCredentials({f"{p.id_str()}:password": "pw1"})
+    creds = FakeCredentials({f"{p.id_str()}:password": "pw1!平文"})
     path = tmp / "export.json"
     counts = export_bundle(path, [p], kh, creds, passphrase=None)
     assert counts["secrets"] == 0
-    assert "pw1" not in path.read_text(encoding="utf-8")
+    assert "pw1!平文" not in path.read_text(encoding="utf-8")
 
 
 def test_duplicate_skip_and_overwrite(env):
@@ -156,7 +156,7 @@ def test_secrets_not_applied_to_skipped_profiles(env):
     p = _profile()
     store.profiles.append(_profile())
     store.save()
-    creds = FakeCredentials({f"{p.id_str()}:password": "pw1"})
+    creds = FakeCredentials({f"{p.id_str()}:password": "pw1!平文"})
     path = tmp / "export.json"
     export_bundle(path, [p], kh, creds, passphrase="pp")
     bundle = load_bundle(path)
