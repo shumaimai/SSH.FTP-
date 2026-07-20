@@ -1,7 +1,7 @@
-"""ランチャー + 1接続1ウィンドウ(Issue #14 段階2)のテスト。
+"""ブラウザ風タブ(Issue #115)のテスト。
 
-ランチャーから接続すると、ストアを共有した独立 SessionWindow が開き、そこで
-接続処理が始まることを確認する。実接続はさせない(start_connect を差し替え)。
+AppWindow が「サーバー一覧」タブを持ち、接続すると新しいタブ(SessionPage)が
+開くことを確認する。実接続はさせない(start_connect を差し替え)。
 """
 import pytest
 
@@ -9,80 +9,82 @@ from hashi.config import Profile
 
 
 @pytest.fixture()
-def launcher(qapp, tmp_path, monkeypatch):
+def app_win(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("APPDATA", str(tmp_path))
     from hashi.config import config_dir
-    from hashi.mainwindow import LauncherWindow, SessionWindow
+    from hashi.mainwindow import AppWindow, SessionPage
     (config_dir() / "settings.json").write_text(
         '{"update_check": false}', encoding="utf-8"
     )
-    before = list(SessionWindow._windows)
-    w = LauncherWindow()
+    # 接続処理は起こさない
+    monkeypatch.setattr(SessionPage, "start_connect", lambda self: None)
+    before = list(SessionPage._pages)
+    w = AppWindow()
     yield w
-    for win in list(SessionWindow._windows):
-        if win not in before:
-            win.session_tab = None   # shutdown を避ける
-            win.close()
+    for page in list(SessionPage._pages):
+        if page not in before:
+            page.session_tab = None
+            page._alive_timer.stop()
+            if page in SessionPage._pages:
+                SessionPage._pages.remove(page)
     w.close()
 
 
-def test_connect_opens_session_window_sharing_services(launcher, monkeypatch):
-    from hashi.mainwindow import SessionWindow
+def test_open_session_adds_tab_sharing_services(app_win):
+    from hashi.mainwindow import SessionPage
 
-    started = []
-    monkeypatch.setattr(SessionWindow, "start_connect",
-                        lambda self: started.append(self))
-
-    n_before = len(SessionWindow._windows)
+    n_before = app_win.tabs.count()
     profile = Profile(host="h", username="u")
-    launcher._connect(profile)
+    page = app_win.open_session(profile)
 
-    assert len(SessionWindow._windows) == n_before + 1
-    win = SessionWindow._windows[-1]
-    assert win.profile is profile
+    assert isinstance(page, SessionPage)
+    assert app_win.tabs.count() == n_before + 1
+    assert app_win.tabs.currentWidget() is page
+    assert page.profile is profile
     # ストア類は同一実体を共有
-    assert win.store is launcher.store
-    assert win.known_hosts is launcher.known_hosts
-    assert win.credentials is launcher.credentials
-    assert win.settings is launcher.settings
-    # 接続が始まった / セッションメニューは接続完了まで無効
-    assert started == [win]
-    assert not win.m_sess.isEnabled()
+    assert page.store is app_win.store
+    assert page.known_hosts is app_win.known_hosts
+    assert page.credentials is app_win.credentials
+    assert page.settings is app_win.settings
+    # 接続完了まではセッションメニュー無効
+    assert not app_win.m_sess.isEnabled()
 
 
-def test_doubleclick_connects(launcher, monkeypatch):
-    launcher.store.profiles.append(Profile(host="h", username="u"))
-    launcher._reload_list()
-    connected = []
-    monkeypatch.setattr(type(launcher), "_connect",
-                        lambda self, p: connected.append(p))
-    launcher._connect_item(launcher.list.item(0))
-    assert len(connected) == 1
+def test_launcher_tab_is_first_and_not_closable(app_win):
+    from PySide6.QtWidgets import QTabBar
+
+    from hashi.mainwindow import LauncherPage
+    assert isinstance(app_win.tabs.widget(0), LauncherPage)
+    # ランチャータブには閉じるボタンが無い
+    assert app_win.tabs.tabBar().tabButton(0, QTabBar.ButtonPosition.RightSide) is None
 
 
-def test_session_close_deregisters(launcher, monkeypatch):
-    from hashi.mainwindow import SessionWindow
+def test_doubleclick_opens_session(app_win, monkeypatch):
+    app_win.launcher.store.profiles.append(Profile(host="h", username="u"))
+    app_win.launcher._reload_list()
+    opened = []
+    monkeypatch.setattr(app_win, "open_session",
+                        lambda p, mode="both": opened.append((p, mode)))
+    app_win.launcher._connect_item(app_win.launcher.list.item(0))
+    assert len(opened) == 1
 
-    monkeypatch.setattr(SessionWindow, "start_connect", lambda self: None)
-    launcher._connect(Profile(host="h", username="u"))
-    win = SessionWindow._windows[-1]
-    assert win in SessionWindow._windows
-    win.close()
-    assert win not in SessionWindow._windows
+
+def test_close_tab_removes_page(app_win):
+    from hashi.mainwindow import SessionPage
+    page = app_win.open_session(Profile(host="h", username="u"))
+    idx = app_win.tabs.indexOf(page)
+    assert page in SessionPage._pages
+    app_win._on_tab_close(idx)
+    assert page not in SessionPage._pages
 
 
-def test_import_from_session_refreshes_launcher_list(launcher, monkeypatch):
-    """セッションウィンドウでの読み込みがランチャーの一覧を更新する。"""
-    from hashi.mainwindow import SessionWindow
-
-    monkeypatch.setattr(SessionWindow, "start_connect", lambda self: None)
-    launcher._connect(Profile(host="h", username="u"))
-    win = SessionWindow._windows[-1]
-    # ストアに直接足して _refresh_profile_lists を呼ぶ
-    launcher.store.profiles.append(Profile(host="new", username="x"))
-    win._refresh_profile_lists()
-    labels = [launcher.list.item(i).text() for i in range(launcher.list.count())]
+def test_import_refreshes_launcher_list(app_win):
+    """読み込み等が反映される refresh_launcher。"""
+    app_win.store.profiles.append(Profile(host="new", username="x"))
+    app_win.refresh_launcher()
+    lst = app_win.launcher.list
+    labels = [lst.item(i).text() for i in range(lst.count())]
     assert any("new" in name or "x@new" in name for name in labels)
 
 

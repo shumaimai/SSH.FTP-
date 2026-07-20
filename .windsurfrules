@@ -95,10 +95,15 @@
   vim 等では行わない)。全画面リフローに拡張する場合も、既存の
   「スクリーン/グリッド/PTY の 3 者一致」と失敗時の無変更を維持すること。
 
-### ウィンドウ構成（`hashi/mainwindow.py`）
+### ウィンドウ構成（`hashi/mainwindow.py`、Issue #115 でブラウザ風タブへ）
 
-- 起動画面は `LauncherWindow`（接続先選択）、接続すると常に `SessionWindow`（1 接続 =
-  1 ウィンドウ）が開く既存構造を維持すること。タブ方式には戻さない。
+- **ブラウザ風タブ方式**: `AppWindow(QMainWindow)` が中央に `QTabWidget` を持ち、
+  各タブ = 1 接続（`SessionPage`）。`+` で新規接続、`✕` でタブを閉じる。
+  （#14 段階2 の「1 接続 = 1 ウィンドウ / タブ方式に戻さない」はオーナー決定 #115 で
+  反転済み。この決定を勝手に元へ戻さないこと。）
+- `SessionPage(QWidget)` は接続・再接続・セッション操作を保持し、`title_changed` /
+  `status_message` シグナルで `AppWindow` のタブ名・ステータスへ反映する。
+  セッションメニューは `AppWindow` が現在のタブへ委譲する。
 - **接続モード（#112）**: `SessionTab(mode=...)` で both / ssh / sftp を切替。
   `terminal` / `browser` / `session_log` は None になり得るので、参照は必ず
   None ガードすること（sudo ボタン・スニペット・セッションログ・再接続・

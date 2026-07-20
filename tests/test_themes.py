@@ -76,7 +76,7 @@ def test_apply_ui_settings_live(qapp):
 
     from PySide6.QtGui import QColor
 
-    from hashi.mainwindow import LauncherWindow, SessionWindow
+    from hashi.mainwindow import AppWindow, SessionPage
     from hashi.terminal import TerminalWidget
 
     term = TerminalWidget(theme="One Half Dark")
@@ -87,13 +87,13 @@ def test_apply_ui_settings_live(qapp):
                     "terminal_font_family": "DejaVu Sans Mono",
                     "terminal_font_size": 13}.get(key)
 
-    fake_win = SimpleNamespace(session_tab=SimpleNamespace(terminal=term))
-    SessionWindow._windows.append(fake_win)
+    fake_page = SimpleNamespace(session_tab=SimpleNamespace(terminal=term))
+    SessionPage._pages.append(fake_page)
     try:
         fake_self = SimpleNamespace(settings=FakeSettings())
-        LauncherWindow._apply_ui_settings_live(fake_self)
+        AppWindow._apply_ui_settings_live(fake_self)
     finally:
-        SessionWindow._windows.remove(fake_win)
+        SessionPage._pages.remove(fake_page)
 
     assert term._c_bg == QColor("#282a36")     # Dracula の背景
     assert term._font.families()[0] == "DejaVu Sans Mono"

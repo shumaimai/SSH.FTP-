@@ -12,7 +12,7 @@ import sys
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
-from hashi.mainwindow import LauncherWindow
+from hashi.mainwindow import AppWindow
 
 
 def setup_logging() -> None:
@@ -62,7 +62,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Hashi")
     apply_dark_theme(app)
-    win = LauncherWindow()
+    win = AppWindow()
     win.show()
     return app.exec()
 

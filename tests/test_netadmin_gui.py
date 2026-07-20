@@ -147,7 +147,7 @@ def test_update_profile_fields_updates_matching_profile(qapp):
     from types import SimpleNamespace
 
     from hashi.config import Profile
-    from hashi.mainwindow import SessionWindow
+    from hashi.mainwindow import SessionPage
 
     prof = Profile(name="srv", host="192.168.0.10", port=22, username="user")
     other = Profile(name="other", host="10.0.0.1", port=22, username="user")
@@ -167,7 +167,7 @@ def test_update_profile_fields_updates_matching_profile(qapp):
                 profile=Profile(host="192.168.0.10", port=22,
                                 username="user"))))
 
-    assert SessionWindow._update_profile_fields(fake, host="192.168.0.99")
+    assert SessionPage._update_profile_fields(fake, host="192.168.0.99")
     assert prof.host == "192.168.0.99"
     assert other.host == "10.0.0.1"
     assert fake.store.saved == 1
@@ -179,7 +179,7 @@ def test_update_profile_fields_updates_matching_profile(qapp):
             session=SimpleNamespace(
                 profile=Profile(host="203.0.113.5", port=22, username="x"))))
     saved_before = fake2.store.saved
-    assert not SessionWindow._update_profile_fields(fake2, port=2222)
+    assert not SessionPage._update_profile_fields(fake2, port=2222)
     assert fake2.store.saved == saved_before
 
 
