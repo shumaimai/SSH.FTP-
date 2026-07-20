@@ -1,7 +1,7 @@
 """接続中ページの表示テスト。"""
 
 from hashi.config import Profile
-from hashi.mainwindow import ConnectingWidget, SessionWindow
+from hashi.mainwindow import ConnectingWidget, SessionPage
 
 
 def test_connecting_widget_shows_indeterminate_progress(qapp):
@@ -28,35 +28,29 @@ def test_connecting_widget_shows_connection_error(qapp):
     page.deleteLater()
 
 
-def test_session_window_connect_failed_shows_error_on_page(qapp, monkeypatch):
-    """接続失敗時、接続中ページにエラーを表示しタイトルを変える(段階2)。"""
+def test_session_page_connect_failed_shows_error_on_page(qapp):
+    """接続失敗時、接続中ページにエラーを表示しタイトル/ステータスを更新(#115)。"""
     profile = Profile(host="example.com", username="user")
-
-    class StatusBar:
-        def __init__(self):
-            self.messages = []
-
-        def showMessage(self, message, timeout):
-            self.messages.append((message, timeout))
-
     page = ConnectingWidget(profile)
 
-    class Window:
+    class FakePage:
         _connecting = page
         profile = Profile(host="example.com", username="user")
-        _titles = []
-        status = StatusBar()
 
-        def statusBar(self):
-            return self.status
+        def __init__(self):
+            self.titles = []
+            self.statuses = []
 
-        def setWindowTitle(self, t):
-            self._titles.append(t)
+        def _set_title(self, t):
+            self.titles.append(t)
 
-    window = Window()
-    SessionWindow._on_connect_failed(window, "認証に失敗しました")
+        def _status(self, m):
+            self.statuses.append(m)
+
+    fp = FakePage()
+    SessionPage._on_connect_failed(fp, "認証に失敗しました")
 
     assert page.message.text() == "接続に失敗しました:\n認証に失敗しました"
-    assert window._titles[-1] == "接続失敗: user@example.com"
-    assert window.status.messages == [("接続に失敗しました", 4000)]
+    assert fp.titles[-1] == "接続失敗: user@example.com"
+    assert fp.statuses == ["接続に失敗しました"]
     page.deleteLater()
