@@ -583,11 +583,17 @@ class SessionTab(QWidget):
     """1 接続分のタブ。ターミナルと SFTP ブラウザを横並びで持つ。"""
 
     def __init__(self, session: SshSession, settings: Settings,
-                 secret_ctx: SecretContext, parent=None):
+                 secret_ctx: SecretContext, parent=None, mode: str = "both"):
         super().__init__(parent)
         self.session = session
         self.settings = settings
         self.secret_ctx = secret_ctx
+        self.mode = mode                    # "both" / "ssh" / "sftp"(Issue #112)
+        self._use_terminal = mode in ("both", "ssh")
+        self._use_browser = mode in ("both", "sftp")
+        self.terminal = None
+        self.browser = None
+        self.session_log = None
         self.tunnels: list[Forward] = []
         self._last_autofill_ts = 0.0
 
@@ -605,6 +611,11 @@ class SessionTab(QWidget):
         self.bt_files.setText("ファイル")
         self.bt_files.setCheckable(True)
         self.bt_files.setChecked(True)
+        # モードで無効になる側のトグルは押せないようにする(#112)
+        self.bt_term.setEnabled(self._use_terminal)
+        self.bt_files.setEnabled(self._use_browser)
+        self.bt_term.setChecked(self._use_terminal)
+        self.bt_files.setChecked(self._use_browser)
         # パスワード送信ボタン(Issue #40)。右クリック=貼り付けのため
         # 「右クリック→送信」は Shift が要ることが伝わらず使えなかった。
         # いつでも押せる常設ボタンにする(送る判断は常に人間、は維持)。
@@ -616,7 +627,7 @@ class SessionTab(QWidget):
         self.bt_sendpw.clicked.connect(
             lambda: self._on_password_prompt("manual"))
         info = QLabel(f"{session.profile.username}@{session.profile.host}:{session.profile.port}")
-        info.setStyleSheet("color:#8a919e;")
+        info.setStyleSheet(f"color:{style.FG_MUTED};")
         bar.addWidget(self.bt_term)
         bar.addWidget(self.bt_files)
         bar.addWidget(self.bt_sendpw)
@@ -625,45 +636,53 @@ class SessionTab(QWidget):
         root.addLayout(bar)
 
         self.splitter = QSplitter(Qt.Horizontal)
-        self.terminal = TerminalWidget(
-            font_size=settings.get("terminal_font_size"),
-            right_click_paste=settings.get("right_click_paste"),
-            theme=settings.get("terminal_theme") or "",
-            font_family=settings.get("terminal_font_family") or "",
-        )
-        # セッションログ (Issue #85)。設定が OFF でもインスタンスは持ち、
-        # メニューから後から開始できるようにしておく。
-        self.session_log = SessionLog(
-            session.profile.label() or session.profile.id_str(),
-            settings.get("session_log_dir") or None,
-            enabled=bool(settings.get("session_log")),
-        )
-        self.terminal.set_session_log(self.session_log)
-        self._logging_enabled_at_start = self.session_log.is_open()
-        self.browser = SftpBrowser(
-            session, session.profile.initial_path,
-            settings=settings,
-            sudo_provider=lambda: self.secret_ctx.get_sudo_password(),
-            sudo_provider_silent=lambda: self.secret_ctx.get_sudo_password(
-                allow_prompt=False),
-            parent=self,
-        )
-        self.splitter.addWidget(self.terminal)
-        self.splitter.addWidget(self.browser)
+        self._logging_enabled_at_start = False
+        if self._use_terminal:
+            self.terminal = TerminalWidget(
+                font_size=settings.get("terminal_font_size"),
+                right_click_paste=settings.get("right_click_paste"),
+                theme=settings.get("terminal_theme") or "",
+                font_family=settings.get("terminal_font_family") or "",
+            )
+            # セッションログ (Issue #85)。設定が OFF でもインスタンスは持ち、
+            # メニューから後から開始できるようにしておく。
+            self.session_log = SessionLog(
+                session.profile.label() or session.profile.id_str(),
+                settings.get("session_log_dir") or None,
+                enabled=bool(settings.get("session_log")),
+            )
+            self.terminal.set_session_log(self.session_log)
+            self._logging_enabled_at_start = self.session_log.is_open()
+            self.splitter.addWidget(self.terminal)
+        if self._use_browser:
+            self.browser = SftpBrowser(
+                session, session.profile.initial_path,
+                settings=settings,
+                sudo_provider=lambda: self.secret_ctx.get_sudo_password(),
+                sudo_provider_silent=lambda: self.secret_ctx.get_sudo_password(
+                    allow_prompt=False),
+                parent=self,
+            )
+            self.splitter.addWidget(self.browser)
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 2)
         root.addWidget(self.splitter, 1)
 
         self.bt_term.toggled.connect(self._apply_visibility)
         self.bt_files.toggled.connect(self._apply_visibility)
-        self.browser.terminal_input.connect(self.terminal.send_text)
-        self.terminal.password_prompt.connect(self._on_password_prompt)
+        if self._use_terminal and self._use_browser:
+            self.browser.terminal_input.connect(self.terminal.send_text)
+        if self._use_terminal:
+            self.terminal.password_prompt.connect(self._on_password_prompt)
+        # SFTP のみのモードではパスワード送信ボタンは意味がない
+        self.bt_sendpw.setEnabled(self._use_terminal)
 
         # トースト(通知)
         self._toast = QLabel(self)
         self._toast.setStyleSheet(
-            "background:#2d333f; color:#dcdfe4; border:1px solid #444c56;"
-            "border-radius:6px; padding:6px 12px;")
+            f"background:{style.BG_RAISED}; color:{style.FG};"
+            f" border:1px solid {style.BORDER};"
+            f" border-radius:{style.TOAST_RADIUS}px; padding:6px 12px;")
         self._toast.setVisible(False)
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
@@ -673,9 +692,10 @@ class SessionTab(QWidget):
         # 自動送信はしない(送る判断は常に人間)。ただしワンタップで済むようにする。
         self._sudo_btn = QPushButton("🔑 sudo パスワードを送信", self)
         self._sudo_btn.setStyleSheet(
-            "QPushButton { background:#3b5a3b; color:#fff; border:1px solid #4f7a4f;"
-            "border-radius:6px; padding:6px 14px; }"
-            "QPushButton:hover { background:#487048; }")
+            f"QPushButton {{ background:{style.OK}; color:#12200f;"
+            f" border:none; border-radius:{style.TOAST_RADIUS}px;"
+            f" padding:6px 14px; font-weight:bold; }}"
+            f"QPushButton:hover {{ background:{style.ACCENT_HOVER}; color:#fff; }}")
         self._sudo_btn.setCursor(Qt.PointingHandCursor)
         self._sudo_btn.setVisible(False)
         self._sudo_btn.clicked.connect(self._send_sudo_password)
@@ -683,14 +703,17 @@ class SessionTab(QWidget):
         self._sudo_btn_timer.setSingleShot(True)
         self._sudo_btn_timer.timeout.connect(lambda: self._sudo_btn.setVisible(False))
 
-        # シェル開始
-        ch = session.open_shell()
-        self.terminal.attach(ch)
-        self.terminal.setFocus()
+        # シェル開始(SSH モードのみ)
+        if self._use_terminal:
+            ch = session.open_shell()
+            self.terminal.attach(ch)
+            self.terminal.setFocus()
 
     # ---- パスワード自動入力 -------------------------------------------------
     def _on_password_prompt(self, kind: str):
         import time
+        if self.terminal is None:
+            return
         if kind == "manual":
             pw = (self.secret_ctx.get_sudo_password()
                   or self.secret_ctx.get_login_password())
@@ -738,8 +761,8 @@ class SessionTab(QWidget):
     def _flash(self, text: str, warn: bool = False):
         self._toast.setText(text)
         self._toast.setStyleSheet(
-            "background:%s; color:#fff; border-radius:6px; padding:6px 12px;"
-            % ("#7a3b3b" if warn else "#2d333f"))
+            "background:%s; color:#fff; border-radius:%dpx; padding:6px 12px;"
+            % (style.DANGER_BG if warn else style.BG_RAISED, style.TOAST_RADIUS))
         self._toast.adjustSize()
         self._toast.move(max(12, (self.width() - self._toast.width()) // 2), 40)
         self._toast.setVisible(True)
@@ -770,12 +793,17 @@ class SessionTab(QWidget):
         if not self.bt_term.isChecked() and not self.bt_files.isChecked():
             sender = self.sender()
             other = self.bt_files if sender is self.bt_term else self.bt_term
-            other.setChecked(True)
-        self.terminal.setVisible(self.bt_term.isChecked())
-        self.browser.setVisible(self.bt_files.isChecked())
+            if other.isEnabled():
+                other.setChecked(True)
+        if self.terminal is not None:
+            self.terminal.setVisible(self.bt_term.isChecked())
+        if self.browser is not None:
+            self.browser.setVisible(self.bt_files.isChecked())
 
     def toggle_session_log(self) -> bool:
         """セッションログを開始/停止し、開始状態を返す。"""
+        if self.terminal is None:
+            return False   # SFTP のみのモードにはターミナル出力がない
         if self.session_log.is_open():
             try:
                 self.session_log.flush_visible(self.terminal.screen)
@@ -801,27 +829,31 @@ class SessionTab(QWidget):
     def shutdown(self):
         for fw in self.tunnels:
             fw.stop()
-        self.browser.shutdown()
-        self.terminal.detach()
+        if self.browser is not None:
+            self.browser.shutdown()
+        if self.terminal is not None:
+            self.terminal.detach()
         self.session.close()
 
     def reconnect_session(self, session: SshSession):
         """接続を張り直し、ターミナル/ブラウザを新しい session に乗り換える。"""
         old_session = self.session
         self.session = session
-        try:
-            self.terminal.detach()
-            ch = session.open_shell(
-                cols=self.terminal.screen.columns,
-                rows=self.terminal.screen.lines,
-            )
-            self.terminal.attach(ch)
-        except Exception:  # noqa: BLE001
-            logger.warning("ターミナル再接続に失敗", exc_info=True)
-        try:
-            self.browser.reconnect_session(session)
-        except Exception:  # noqa: BLE001
-            logger.warning("SFTP ブラウザ再接続に失敗", exc_info=True)
+        if self.terminal is not None:
+            try:
+                self.terminal.detach()
+                ch = session.open_shell(
+                    cols=self.terminal.screen.columns,
+                    rows=self.terminal.screen.lines,
+                )
+                self.terminal.attach(ch)
+            except Exception:  # noqa: BLE001
+                logger.warning("ターミナル再接続に失敗", exc_info=True)
+        if self.browser is not None:
+            try:
+                self.browser.reconnect_session(session)
+            except Exception:  # noqa: BLE001
+                logger.warning("SFTP ブラウザ再接続に失敗", exc_info=True)
         for fw in self.tunnels:
             fw.stop()
         self.tunnels = []
@@ -1139,7 +1171,7 @@ class _SharedOps:
         size = self.settings.get("terminal_font_size")
         for win in SessionWindow._windows:
             tab = win.session_tab
-            if tab is None:
+            if tab is None or tab.terminal is None:
                 continue
             try:
                 tab.terminal.set_theme(theme)
@@ -1354,12 +1386,19 @@ class LauncherWindow(_SharedOps, QMainWindow):
         if row < 0:
             return
         menu = QMenu(self)
-        a_conn = menu.addAction("接続(新しいウィンドウ)")
+        a_conn = menu.addAction("接続(ターミナル + ファイル)")
+        a_ssh = menu.addAction("ターミナルのみで接続")
+        a_sftp = menu.addAction("ファイルのみで接続")
+        menu.addSeparator()
         a_edit = menu.addAction("編集…")
         a_del = menu.addAction("削除")
         chosen = menu.exec(self.list.viewport().mapToGlobal(pos))
         if chosen is a_conn:
             self._connect(self.store.profiles[row])
+        elif chosen is a_ssh:
+            self._connect(self.store.profiles[row], mode="ssh")
+        elif chosen is a_sftp:
+            self._connect(self.store.profiles[row], mode="sftp")
         elif chosen is a_edit:
             dlg = ConnectDialog(
                 self, self.store.profiles[row], self.credentials)
@@ -1383,9 +1422,13 @@ class LauncherWindow(_SharedOps, QMainWindow):
         if isinstance(idx, int) and 0 <= idx < len(self.store.profiles):
             self._connect(self.store.profiles[idx])
 
-    def _connect(self, profile: Profile):
-        """独立したウィンドウを開いて接続する(常に新ウィンドウ)。"""
-        win = SessionWindow(self._services, profile, launcher=self)
+    def _connect(self, profile: Profile, mode: str = "both"):
+        """独立したウィンドウを開いて接続する(常に新ウィンドウ)。
+
+        mode: "both"(ターミナル+ファイル)/ "ssh"(ターミナルのみ)/
+              "sftp"(ファイルのみ)(Issue #112)。
+        """
+        win = SessionWindow(self._services, profile, launcher=self, mode=mode)
         win.show()
         win.start_connect()
 
@@ -1402,7 +1445,8 @@ class SessionWindow(_SharedOps, QMainWindow):
 
     _windows: list["SessionWindow"] = []
 
-    def __init__(self, services: dict, profile: Profile, launcher=None):
+    def __init__(self, services: dict, profile: Profile, launcher=None,
+                 mode: str = "both"):
         super().__init__()
         self._services = services
         self.store = services["store"]
@@ -1411,6 +1455,7 @@ class SessionWindow(_SharedOps, QMainWindow):
         self.credentials = services["credentials"]
         self.snippets = services["snippets"]
         self._launcher = launcher
+        self._mode = mode                   # both / ssh / sftp(Issue #112)
         self.profile = profile
         self.session_tab: SessionTab | None = None
         self._workers: list[ConnectWorker] = []
@@ -1513,9 +1558,9 @@ class SessionWindow(_SharedOps, QMainWindow):
             act.triggered.connect(lambda checked, s=snippet: self._send_snippet(s))
 
     def _send_snippet(self, snippet: Snippet):
-        if self.session_tab is None:
+        if self.session_tab is None or self.session_tab.terminal is None:
             QMessageBox.information(
-                self, "スニペット", "接続中のみスニペットを送信できます。")
+                self, "スニペット", "ターミナル接続中のみスニペットを送信できます。")
             return
         values = SnippetVariablesDialog.ask(self, snippet.body)
         if values is None:
@@ -1561,19 +1606,23 @@ class SessionWindow(_SharedOps, QMainWindow):
                             self.settings, self)
         if worker.used_password:
             ctx.note_login_password(worker.used_password)
-        tab = SessionTab(session, self.settings, ctx)
+        tab = SessionTab(session, self.settings, ctx, mode=self._mode)
         self.session_tab = tab
-        tab.terminal.set_snippet_store(self.snippets)
+        if tab.terminal is not None:
+            tab.terminal.set_snippet_store(self.snippets)
         self.setCentralWidget(tab)
         self._connecting = None
         self.m_sess.setEnabled(True)
         self.act_session_log.setText(
-            "セッションログを停止" if tab.session_log.is_open()
+            "セッションログを停止" if (tab.session_log and tab.session_log.is_open())
             else "セッションログを開始")
+        self.act_session_log.setEnabled(tab.terminal is not None)
         label = session.profile.label()
         self.setWindowTitle(label)
-        tab.terminal.session_closed.connect(self._mark_disconnected)
-        tab.terminal.session_closed.connect(self._on_session_closed)
+        # 切断検知はターミナルの session_closed か、SFTP のみなら死活ポーリング
+        if tab.terminal is not None:
+            tab.terminal.session_closed.connect(self._mark_disconnected)
+            tab.terminal.session_closed.connect(self._on_session_closed)
         self._record_last_connected(session.profile)
         self.statusBar().showMessage(f"{label} に接続しました", 5000)
         self._reconnect_attempts = 0
@@ -1704,7 +1753,7 @@ class SessionWindow(_SharedOps, QMainWindow):
 
     def _font_delta(self, d: int):
         tab = self.session_tab
-        if tab is not None:
+        if tab is not None and tab.terminal is not None:
             tab.terminal.set_font_size(tab.terminal.font_size() + d)
 
     def _toggle_session_log(self):
@@ -1921,7 +1970,7 @@ class SessionWindow(_SharedOps, QMainWindow):
     def closeEvent(self, ev):
         tab = self.session_tab
         if tab is not None:
-            if tab.browser.has_active_transfers():
+            if tab.browser is not None and tab.browser.has_active_transfers():
                 r = QMessageBox.question(
                     self, "転送中です",
                     "ファイル転送が進行中です。中断して切断しますか?",

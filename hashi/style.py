@@ -11,21 +11,23 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QLabel
 
-# ---- カラーパレット(Fusion ダークと同系。#RRGGBB のみ) --------------------
-BG = "#22262e"           # ウィンドウ背景
-BG_BASE = "#1b1f27"      # 入力欄・リスト背景
-BG_RAISED = "#2b303b"    # ボタン・ツールチップ背景
-FG = "#dcdfe4"           # 基本テキスト
-FG_MUTED = "#8a919e"     # 補足・注記(旧 #888 系はこれに統一)
-FG_DISABLED = "#6b7280"  # 無効状態・プレースホルダ
-ACCENT = "#3d59a1"       # 選択・強調(パレットの Highlight と一致)
-BORDER = "#444c56"       # 枠線
+# ---- カラーパレット(参考デザイン TransTerm、Issue #111。#RRGGBB のみ) ------
+# main.py の Fusion パレットと一致させる(片方だけ変えると test_style が落ちる)。
+BG = "#1e1f24"           # ウィンドウ背景
+BG_BASE = "#191a1f"      # 入力欄・リスト背景(BG より一段暗い)
+BG_RAISED = "#2a2b33"    # ボタン・チップ・ツールチップ背景
+FG = "#e8e8ec"           # 基本テキスト
+FG_MUTED = "#9a9ba6"     # 補足・注記
+FG_DISABLED = "#6b6c78"  # 無効状態・プレースホルダ
+ACCENT = "#4f8cff"       # 選択・強調・リンク・主ボタン
+ACCENT_HOVER = "#7caaff"  # アクセントのホバー
+BORDER = "#3a3b44"       # 枠線
 
 # セマンティックカラー(意味が決まっている色。用途外に使わない)
 WARN = "#d0a050"         # 警告(取り返しがつきにくい操作の注意書き)
-ERROR = "#e06c75"        # エラー・危険
+ERROR = "#e0655f"        # エラー・危険・閉じる(参考の close 色)
 DANGER_BG = "#7a3b3b"    # 危険スイッチ(権限無視等)ON 時の背景
-OK = "#98c379"           # 成功・安全
+OK = "#77c777"           # 成功・安全
 
 # プロファイルの色マーカー(#81)。統一感のため自由入力ではなくこのプリセットのみ
 PROFILE_COLORS: list[tuple[str, str]] = [
@@ -45,6 +47,25 @@ DIALOG_S = 420           # 小: 入力 1〜3 個の単機能ダイアログ
 DIALOG_M = 520           # 中: フォーム + 注意書き(標準)
 DIALOG_L = 640           # 大: 一覧やプレビューを含むもの
 TOAST_RADIUS = 6         # トースト等の角丸
+CHIP_RADIUS = 6          # チップ型ボタンの角丸(参考デザイン #111)
+
+
+def chip_style(active: bool = False, danger: bool = False) -> str:
+    """チップ型ボタン(参考デザインのツールバー)の QSS を返す(#111)。
+
+    active=True で押下状態(アクセント枠)、danger=True で ON 時に危険背景
+    (権限無視スイッチ等)。
+    """
+    bg = DANGER_BG if (active and danger) else (BG_RAISED if active else "transparent")
+    border = ACCENT if active and not danger else BORDER
+    return (
+        "QPushButton, QToolButton {"
+        f" background:{bg}; color:{FG}; border:1px solid {border};"
+        f" border-radius:{CHIP_RADIUS}px; padding:4px 10px; font-size:12px; }}"
+        f"QPushButton:hover, QToolButton:hover {{ background:{BG_RAISED}; }}"
+        f"QPushButton:disabled, QToolButton:disabled {{ color:{FG_DISABLED};"
+        f" border-color:{BORDER}; background:transparent; }}"
+    )
 
 # ---- ラベルヘルパー(注意書き・補足の見た目を統一) --------------------------
 

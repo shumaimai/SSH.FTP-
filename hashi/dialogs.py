@@ -121,7 +121,8 @@ class HostKeyDialog(QDialog):
         fp = QLabel(f"{info['key_type']}\n{info['fingerprint']}")
         fp.setFont(mono)
         fp.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        fp.setStyleSheet("padding:8px; background:#22262e; border-radius:4px;")
+        fp.setStyleSheet(
+            f"padding:8px; background:{style.BG_RAISED}; border-radius:4px;")
         lay.addWidget(fp)
 
         if mismatch and info.get("old_fingerprint"):

@@ -4,21 +4,37 @@ import re
 from hashi import style
 
 
-def test_palette_matches_fusion_theme():
-    """style.py のパレットは main.py の Fusion ダークと一致させる決まり。"""
-    import inspect
+def test_palette_applied_from_style_constants(qapp):
+    """main の Fusion パレットが style.py の定数から作られている(#111)。
+
+    main.apply_dark_theme が style 定数を参照するので、適用後のパレット色が
+    定数と一致することを確認する(片方だけ変えると落ちる)。"""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
 
     import main
-    src = inspect.getsource(main)
-    for const in (style.BG, style.BG_BASE, style.BG_RAISED, style.FG,
-                  style.FG_DISABLED, style.ACCENT):
-        assert const in src, f"{const} が main.py のテーマに見当たらない"
+    main.apply_dark_theme(QApplication.instance())
+    pal = QApplication.instance().palette()
+    assert pal.color(QPalette.Window) == QColor(style.BG)
+    assert pal.color(QPalette.Base) == QColor(style.BG_BASE)
+    assert pal.color(QPalette.WindowText) == QColor(style.FG)
+    assert pal.color(QPalette.Highlight) == QColor(style.ACCENT)
 
 
 def test_colors_are_hex():
     for name in ("BG", "BG_BASE", "BG_RAISED", "FG", "FG_MUTED",
-                 "FG_DISABLED", "ACCENT", "BORDER", "WARN", "ERROR", "OK"):
+                 "FG_DISABLED", "ACCENT", "ACCENT_HOVER", "BORDER",
+                 "WARN", "ERROR", "OK"):
         assert re.fullmatch(r"#[0-9a-f]{6}", getattr(style, name), re.I), name
+
+
+def test_chip_style_variants():
+    base = style.chip_style()
+    assert "transparent" in base and style.BORDER in base
+    active = style.chip_style(active=True)
+    assert style.ACCENT in active
+    danger = style.chip_style(active=True, danger=True)
+    assert style.DANGER_BG in danger
 
 
 def test_warning_and_muted_labels(qapp):

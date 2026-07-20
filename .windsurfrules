@@ -99,6 +99,10 @@
 
 - 起動画面は `LauncherWindow`（接続先選択）、接続すると常に `SessionWindow`（1 接続 =
   1 ウィンドウ）が開く既存構造を維持すること。タブ方式には戻さない。
+- **接続モード（#112）**: `SessionTab(mode=...)` で both / ssh / sftp を切替。
+  `terminal` / `browser` / `session_log` は None になり得るので、参照は必ず
+  None ガードすること（sudo ボタン・スニペット・セッションログ・再接続・
+  shutdown・フォント変更・has_active_transfers など）。
 - プロファイル / 既知ホスト / 認証情報 / 設定は全ウィンドウで **1 実体を共有**する
   （`services` dict）。ウィンドウごとに新規生成しないこと。
 - ストアだけで完結する操作（書き出し/読み込み/P2P/クラウド同期/鍵生成）は `_SharedOps`

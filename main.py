@@ -32,25 +32,28 @@ def setup_logging() -> None:
 
 
 def apply_dark_theme(app: QApplication) -> None:
+    # パレットは hashi/style.py と一致させる(Issue #111: 参考デザイン TransTerm)。
+    # 片方だけ変えると tests/test_style.py が落ちる。
+    from hashi import style
     app.setStyle("Fusion")
     p = QPalette()
-    bg = QColor("#22262e")
-    base = QColor("#1b1f27")
-    text = QColor("#dcdfe4")
+    bg = QColor(style.BG)
+    base = QColor(style.BG_BASE)
+    text = QColor(style.FG)
     p.setColor(QPalette.Window, bg)
     p.setColor(QPalette.WindowText, text)
     p.setColor(QPalette.Base, base)
     p.setColor(QPalette.AlternateBase, bg)
     p.setColor(QPalette.Text, text)
-    p.setColor(QPalette.Button, QColor("#2b303b"))
+    p.setColor(QPalette.Button, QColor(style.BG_RAISED))
     p.setColor(QPalette.ButtonText, text)
-    p.setColor(QPalette.ToolTipBase, QColor("#2b303b"))
+    p.setColor(QPalette.ToolTipBase, QColor(style.BG_RAISED))
     p.setColor(QPalette.ToolTipText, text)
-    p.setColor(QPalette.Highlight, QColor("#3d59a1"))
+    p.setColor(QPalette.Highlight, QColor(style.ACCENT))
     p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-    p.setColor(QPalette.PlaceholderText, QColor("#6b7280"))
-    p.setColor(QPalette.Disabled, QPalette.Text, QColor("#6b7280"))
-    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6b7280"))
+    p.setColor(QPalette.PlaceholderText, QColor(style.FG_DISABLED))
+    p.setColor(QPalette.Disabled, QPalette.Text, QColor(style.FG_DISABLED))
+    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(style.FG_DISABLED))
     app.setPalette(p)
 
 

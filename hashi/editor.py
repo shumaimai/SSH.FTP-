@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import style
 from .windowfit import fit_to_screen
 
 # ---- シンタックスハイライト規則 -------------------------------------------------
@@ -216,8 +217,8 @@ class CodeEdit(QPlainTextEdit):
         self._highlight_current_line()
 
         pal = self.palette()
-        pal.setColor(QPalette.Base, QColor("#1b1f27"))
-        pal.setColor(QPalette.Text, QColor("#dcdfe4"))
+        pal.setColor(QPalette.Base, QColor(style.BG_BASE))
+        pal.setColor(QPalette.Text, QColor(style.FG))
         self.setPalette(pal)
 
     def line_number_width(self) -> int:
