@@ -80,6 +80,7 @@ def info_chip(text: str, color: str = "") -> QLabel:
 # main.py で QApplication へ setStyleSheet する。色は必ずこの定数から取る。
 # ターミナル本体は自前 QPainter 描画なので QSS の影響を受けない。
 _APP_QSS = """
+QDialog { background: %(BG)s; }
 QToolTip {
     background: %(BG_RAISED)s; color: %(FG)s;
     border: 1px solid %(BORDER)s; border-radius: 6px; padding: 4px 8px;
@@ -114,11 +115,13 @@ QPushButton {
 QPushButton:hover { border-color: %(ACCENT)s; }
 QPushButton:pressed { background: %(BG)s; }
 QPushButton:disabled { color: %(FG_DISABLED)s; background: transparent; border-color: %(BORDER)s; }
-QPushButton[primary="true"] {
+QPushButton[primary="true"], QPushButton:default {
     background: %(ACCENT)s; color: #ffffff; border: none; font-weight: bold;
 }
-QPushButton[primary="true"]:hover { background: %(ACCENT_HOVER)s; }
-QPushButton[primary="true"]:disabled { background: %(BG_RAISED)s; color: %(FG_DISABLED)s; }
+QPushButton[primary="true"]:hover, QPushButton:default:hover { background: %(ACCENT_HOVER)s; }
+QPushButton[primary="true"]:disabled, QPushButton:default:disabled {
+    background: %(BG_RAISED)s; color: %(FG_DISABLED)s;
+}
 
 QToolButton {
     background: transparent; color: %(FG)s;
