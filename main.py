@@ -55,6 +55,8 @@ def apply_dark_theme(app: QApplication) -> None:
     p.setColor(QPalette.Disabled, QPalette.Text, QColor(style.FG_DISABLED))
     p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(style.FG_DISABLED))
     app.setPalette(p)
+    # 全体の質感を QSS でまとめて仕上げる(Issue #113)。ターミナルは自前描画なので無影響。
+    app.setStyleSheet(style.app_stylesheet())
 
 
 def main() -> int:

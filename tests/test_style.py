@@ -37,6 +37,20 @@ def test_chip_style_variants():
     assert style.DANGER_BG in danger
 
 
+def test_app_stylesheet_is_valid_qss(qapp):
+    """全体 QSS が定数から作られ、主要な色を含み、% 置換が残っていない(#113)。"""
+    qss = style.app_stylesheet()
+    assert "%(" not in qss and "%s" not in qss   # 未置換プレースホルダが無い
+    for token in (style.ACCENT, style.BORDER, style.BG_BASE, style.FG):
+        assert token in qss
+    # 主要ウィジェットのセレクタが含まれる
+    for sel in ("QTabBar::tab", "QScrollBar", "QMenu", "QLineEdit", "QPushButton"):
+        assert sel in qss
+    # 実際に適用できる(パースエラーがあれば Qt が警告するが例外にはならない)
+    qapp.setStyleSheet(qss)
+    qapp.setStyleSheet("")
+
+
 def test_warning_and_muted_labels(qapp):
     w = style.warning_label("危険な操作です")
     assert w.text().startswith("⚠")

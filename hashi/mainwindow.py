@@ -14,6 +14,7 @@ import time
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -602,14 +603,21 @@ class SessionTab(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        bar = QHBoxLayout()
-        bar.setContentsMargins(6, 4, 6, 2)
+        # 上部チップ型ツールバー(Issue #113)。表示トグル + 高頻度操作を並べる。
+        bar_w = QFrame()
+        bar_w.setObjectName("sessionToolbar")
+        bar_w.setStyleSheet(
+            f"#sessionToolbar {{ background:{style.BG};"
+            f" border-bottom:1px solid {style.BORDER}; }}")
+        bar = QHBoxLayout(bar_w)
+        bar.setContentsMargins(10, 6, 10, 6)
+        bar.setSpacing(6)
         self.bt_term = QToolButton()
-        self.bt_term.setText("ターミナル")
+        self.bt_term.setText("🖥  ターミナル")
         self.bt_term.setCheckable(True)
         self.bt_term.setChecked(True)
         self.bt_files = QToolButton()
-        self.bt_files.setText("ファイル")
+        self.bt_files.setText("📁  ファイル")
         self.bt_files.setCheckable(True)
         self.bt_files.setChecked(True)
         # モードで無効になる側のトグルは押せないようにする(#112)
@@ -627,14 +635,15 @@ class SessionTab(QWidget):
             "(Shift+右クリックのメニューからも送信できます)")
         self.bt_sendpw.clicked.connect(
             lambda: self._on_password_prompt("manual"))
-        info = QLabel(f"{session.profile.username}@{session.profile.host}:{session.profile.port}")
-        info.setStyleSheet(f"color:{style.FG_MUTED};")
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet(f"color:{style.BORDER};")
         bar.addWidget(self.bt_term)
         bar.addWidget(self.bt_files)
+        bar.addWidget(sep)
         bar.addWidget(self.bt_sendpw)
         bar.addStretch(1)
-        bar.addWidget(info)
-        root.addLayout(bar)
+        root.addWidget(bar_w)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self._logging_enabled_at_start = False
@@ -669,10 +678,16 @@ class SessionTab(QWidget):
         self.splitter.setStretchFactor(1, 2)
         root.addWidget(self.splitter, 1)
 
+        # 下部 情報ステータスバー(Issue #113): 接続先 / 暗号スイート / 文字コード /
+        # 転送状況。ネゴシエート済み暗号は接続確立後の transport から取る。
+        root.addWidget(self._build_infobar())
+
         self.bt_term.toggled.connect(self._apply_visibility)
         self.bt_files.toggled.connect(self._apply_visibility)
         if self._use_terminal and self._use_browser:
             self.browser.terminal_input.connect(self.terminal.send_text)
+        if self._use_browser:
+            self.browser.xfer.progress.connect(self._on_xfer_progress)
         if self._use_terminal:
             self.terminal.password_prompt.connect(self._on_password_prompt)
         # SFTP のみのモードではパスワード送信ボタンは意味がない
@@ -709,6 +724,47 @@ class SessionTab(QWidget):
             ch = session.open_shell()
             self.terminal.attach(ch)
             self.terminal.setFocus()
+
+    # ---- 情報ステータスバー(#113) -----------------------------------------
+    def _build_infobar(self) -> QWidget:
+        w = QFrame()
+        w.setObjectName("sessionInfoBar")
+        w.setStyleSheet(
+            f"#sessionInfoBar {{ background:{style.BG};"
+            f" border-top:1px solid {style.BORDER}; }}"
+            f"#sessionInfoBar QLabel {{ color:{style.FG_MUTED}; font-size:11px; }}")
+        h = QHBoxLayout(w)
+        h.setContentsMargins(10, 3, 10, 3)
+        h.setSpacing(14)
+        p = self.session.profile
+        mode_txt = {"both": "🖥+📁", "ssh": "🖥", "sftp": "📁"}.get(self.mode, "")
+        h.addWidget(QLabel(f"🔗 {p.username}@{p.host}:{p.port}"))
+        try:
+            cipher = self.session.security_summary()
+        except Exception:
+            cipher = ""
+        if cipher:
+            lbl = QLabel(f"🔒 {cipher}")
+            lbl.setToolTip("ネゴシエート済みの暗号スイート")
+            h.addWidget(lbl)
+        h.addWidget(QLabel("UTF-8"))
+        if mode_txt:
+            h.addWidget(QLabel(mode_txt))
+        h.addStretch(1)
+        self._xfer_label = QLabel("")
+        self._xfer_label.setStyleSheet(f"color:{style.ACCENT};")
+        h.addWidget(self._xfer_label)
+        return w
+
+    def _on_xfer_progress(self, info: dict):
+        """SFTP 転送の進捗を情報バー右端に表示する(アイドルは空)。"""
+        if not info.get("label") and info.get("total", 0) <= 1:
+            self._xfer_label.setText("")
+            return
+        done = info.get("done", 0)
+        total = max(info.get("total", 1), 1)
+        pct = min(int(done * 100 / total), 100)
+        self._xfer_label.setText(f"⇅ {info['label']}  {pct}%")
 
     # ---- パスワード自動入力 -------------------------------------------------
     def _on_password_prompt(self, kind: str):
@@ -1215,8 +1271,10 @@ class LauncherPage(QWidget):
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(8)
         title = QLabel("接続先を選択")
-        title.setStyleSheet("font-size:16px; font-weight:bold;")
+        title.setStyleSheet("font-size:18px; font-weight:bold; padding:2px 0;")
         btn_new = QPushButton("＋ 新しい接続")
+        btn_new.setProperty("primary", True)
+        btn_new.setCursor(Qt.PointingHandCursor)
         btn_new.clicked.connect(self.new_profile)
         # インクリメンタル検索(#81)。名前/ホスト/ユーザー/タグで絞り込み
         self.ed_search = QLineEdit()

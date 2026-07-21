@@ -67,6 +67,131 @@ def chip_style(active: bool = False, danger: bool = False) -> str:
         f" border-color:{BORDER}; background:transparent; }}"
     )
 
+def info_chip(text: str, color: str = "") -> QLabel:
+    """情報ステータスバー用の小さな丸みラベル(アイコン + 値)。"""
+    lbl = QLabel(text)
+    c = color or FG_MUTED
+    lbl.setStyleSheet(
+        f"color:{c}; padding:1px 4px; font-size:11px;")
+    return lbl
+
+
+# ---- アプリ全体のスタイルシート(Issue #113 / デザイン刷新) ------------------
+# main.py で QApplication へ setStyleSheet する。色は必ずこの定数から取る。
+# ターミナル本体は自前 QPainter 描画なので QSS の影響を受けない。
+_APP_QSS = """
+QToolTip {
+    background: %(BG_RAISED)s; color: %(FG)s;
+    border: 1px solid %(BORDER)s; border-radius: 6px; padding: 4px 8px;
+}
+
+QMenuBar { background: %(BG)s; border-bottom: 1px solid %(BORDER)s; padding: 2px 4px; }
+QMenuBar::item { background: transparent; padding: 4px 10px; border-radius: 6px; }
+QMenuBar::item:selected, QMenuBar::item:pressed { background: %(BG_RAISED)s; }
+QMenu { background: %(BG_RAISED)s; border: 1px solid %(BORDER)s; border-radius: 8px; padding: 4px; }
+QMenu::item { padding: 6px 20px; border-radius: 6px; }
+QMenu::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QMenu::separator { height: 1px; background: %(BORDER)s; margin: 4px 8px; }
+
+QTabWidget::pane { border: none; border-top: 1px solid %(BORDER)s; }
+QTabBar::tab {
+    background: transparent; color: %(FG_MUTED)s;
+    padding: 7px 16px; margin-right: 2px;
+    border: 1px solid transparent;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+}
+QTabBar::tab:hover { background: %(BG_RAISED)s; color: %(FG)s; }
+QTabBar::tab:selected {
+    background: %(BG_BASE)s; color: %(FG)s;
+    border-color: %(BORDER)s; border-bottom-color: %(BG_BASE)s;
+}
+
+QPushButton {
+    background: %(BG_RAISED)s; color: %(FG)s;
+    border: 1px solid %(BORDER)s; border-radius: %(R)spx;
+    padding: 6px 14px;
+}
+QPushButton:hover { border-color: %(ACCENT)s; }
+QPushButton:pressed { background: %(BG)s; }
+QPushButton:disabled { color: %(FG_DISABLED)s; background: transparent; border-color: %(BORDER)s; }
+QPushButton[primary="true"] {
+    background: %(ACCENT)s; color: #ffffff; border: none; font-weight: bold;
+}
+QPushButton[primary="true"]:hover { background: %(ACCENT_HOVER)s; }
+QPushButton[primary="true"]:disabled { background: %(BG_RAISED)s; color: %(FG_DISABLED)s; }
+
+QToolButton {
+    background: transparent; color: %(FG)s;
+    border: 1px solid transparent; border-radius: %(R)spx; padding: 5px 9px;
+}
+QToolButton:hover { background: %(BG_RAISED)s; }
+QToolButton:checked { background: %(BG_RAISED)s; border-color: %(ACCENT)s; }
+QToolButton:disabled { color: %(FG_DISABLED)s; }
+
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {
+    background: %(BG_BASE)s; color: %(FG)s;
+    border: 1px solid %(BORDER)s; border-radius: %(R)spx;
+    padding: 5px 8px; selection-background-color: %(ACCENT)s;
+    selection-color: #ffffff;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
+QSpinBox:focus, QComboBox:focus { border-color: %(ACCENT)s; }
+QComboBox::drop-down { border: none; width: 20px; }
+
+QListWidget, QTreeWidget, QTreeView, QListView {
+    background: %(BG_BASE)s; border: 1px solid %(BORDER)s; border-radius: 8px;
+    outline: none;
+}
+QListWidget::item { padding: 6px 8px; border-radius: 6px; }
+QListWidget::item:hover { background: %(BG_RAISED)s; }
+QListWidget::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QTreeView::item:selected, QListView::item:selected,
+QTreeWidget::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QHeaderView::section {
+    background: %(BG)s; color: %(FG_MUTED)s;
+    border: none; border-bottom: 1px solid %(BORDER)s; padding: 5px 8px;
+}
+
+QScrollBar:vertical { background: transparent; width: 11px; margin: 0; }
+QScrollBar::handle:vertical { background: %(BORDER)s; border-radius: 5px; min-height: 32px; margin: 2px; }
+QScrollBar::handle:vertical:hover { background: %(FG_DISABLED)s; }
+QScrollBar:horizontal { background: transparent; height: 11px; margin: 0; }
+QScrollBar::handle:horizontal { background: %(BORDER)s; border-radius: 5px; min-width: 32px; margin: 2px; }
+QScrollBar::handle:horizontal:hover { background: %(FG_DISABLED)s; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QStatusBar { background: %(BG)s; border-top: 1px solid %(BORDER)s; color: %(FG_MUTED)s; }
+QStatusBar::item { border: none; }
+QSplitter::handle { background: %(BORDER)s; }
+QSplitter::handle:horizontal { width: 1px; }
+QSplitter::handle:vertical { height: 1px; }
+
+QProgressBar {
+    background: %(BG_BASE)s; border: 1px solid %(BORDER)s; border-radius: 6px;
+    text-align: center; color: %(FG)s; height: 14px;
+}
+QProgressBar::chunk { background: %(ACCENT)s; border-radius: 5px; }
+
+QGroupBox {
+    border: 1px solid %(BORDER)s; border-radius: 8px;
+    margin-top: 10px; padding-top: 8px;
+}
+QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: %(FG_MUTED)s; }
+QCheckBox, QRadioButton { spacing: 6px; }
+"""
+
+
+def app_stylesheet() -> str:
+    """アプリ全体へ適用する QSS を返す(Issue #113)。色は必ず定数から。"""
+    return _APP_QSS % {
+        "BG": BG, "BG_BASE": BG_BASE, "BG_RAISED": BG_RAISED,
+        "FG": FG, "FG_MUTED": FG_MUTED, "FG_DISABLED": FG_DISABLED,
+        "ACCENT": ACCENT, "ACCENT_HOVER": ACCENT_HOVER, "BORDER": BORDER,
+        "R": CHIP_RADIUS,
+    }
+
+
 # ---- ラベルヘルパー(注意書き・補足の見た目を統一) --------------------------
 
 
