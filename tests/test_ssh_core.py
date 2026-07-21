@@ -7,6 +7,31 @@ from hashi.config import Profile
 from hashi.ssh_core import SshSession
 
 
+def test_security_summary_reports_negotiated_cipher():
+    """接続確立後の transport からネゴシエート済み暗号 / MAC をまとめる(#113)。"""
+    session = SshSession(Profile())
+    # transport 未接続なら空文字
+    assert session.security_summary() == ""
+
+    t = MagicMock()
+    t.is_active.return_value = True
+    t.remote_cipher = "aes256-ctr"
+    t.local_cipher = "aes256-ctr"
+    t.remote_mac = "hmac-sha2-256"
+    t.local_mac = "hmac-sha2-256"
+    session.transport = t
+    assert session.security_summary() == "aes256-ctr / hmac-sha2-256"
+
+    # GCM 系は MAC を内包するので省く
+    t.remote_cipher = "aes256-gcm@openssh.com"
+    t.local_cipher = "aes256-gcm@openssh.com"
+    assert session.security_summary() == "aes256-gcm@openssh.com"
+
+    # 非アクティブなら空
+    t.is_active.return_value = False
+    assert session.security_summary() == ""
+
+
 def test_open_shell_attaches_agent_request_handler_when_enabled():
     """agent_forwarding=True のとき、シェルチャネルに AgentRequestHandler を仕掛け保持する。"""
     session = SshSession(Profile(agent_forwarding=True))

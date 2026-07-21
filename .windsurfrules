@@ -59,6 +59,12 @@
 - UI の追加・変更は `docs/ui-style-guide.md` に準拠すること。
 - 色コード・ダイアログ幅を直書きしないこと。`hashi/style.py` の定数/ヘルパー
   （`WARN`/`ERROR`/`FG_MUTED`、`warning_label`/`muted_label`、`DIALOG_S/M/L`）を使う。
+- アプリ全体の見た目は `style.app_stylesheet()` を `main.py` で適用する（#113）。
+  個別 QSS を書くときも色は必ず style 定数から取り、パレット（main.py）と
+  食い違わせないこと（`tests/test_style.py` が一致を検査する）。
+- セッション画面のチップ型ツールバー（表示トグル + パスワード送信）と下部の
+  情報ステータスバー（接続先 / 暗号スイート / 文字コード / 転送進捗）は #113 の構成。
+  暗号スイートは `SshSession.security_summary()` から取り、勝手に平文化・詐称しないこと。
 - 破壊的操作は `DoubleCheckDialog`（確認語入力）を必須とし、自動処理の失敗や
   ロールバックを静かに握り潰さないこと（必ずユーザーへ通知する）。
 

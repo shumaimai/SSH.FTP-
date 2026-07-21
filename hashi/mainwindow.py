@@ -11,9 +11,18 @@ import logging
 import threading
 import time
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -556,27 +565,47 @@ class ConnectingWidget(QWidget):
 
     def __init__(self, profile: Profile, parent=None):
         super().__init__(parent)
-        root = QVBoxLayout(self)
-        root.setAlignment(Qt.AlignCenter)
-        root.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setAlignment(Qt.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("connectCard")
+        card.setStyleSheet(
+            f"#connectCard {{ background:{style.BG_BASE};"
+            f" border:1px solid {style.BORDER}; border-radius:12px; }}")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(32, 26, 32, 26)
+        cv.setSpacing(14)
+        cv.setAlignment(Qt.AlignCenter)
 
         self.message = QLabel(f"{profile.label()} に接続しています…")
         self.message.setAlignment(Qt.AlignCenter)
-        self.message.setStyleSheet("font-size:16px;")
-        root.addWidget(self.message)
+        self.message.setStyleSheet("font-size:16px; font-weight:bold;")
+        self._sub = QLabel("認証とホスト鍵を確認しています")
+        self._sub.setAlignment(Qt.AlignCenter)
+        self._sub.setStyleSheet(f"color:{style.FG_MUTED}; font-size:12px;")
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
-        self.progress.setFixedWidth(280)
-        root.addWidget(self.progress, 0, Qt.AlignCenter)
+        self.progress.setFixedWidth(300)
+        self.progress.setTextVisible(False)
+
+        cv.addWidget(self.message)
+        cv.addWidget(self._sub)
+        cv.addWidget(self.progress, 0, Qt.AlignCenter)
+        outer.addWidget(card)
 
     def show_error(self, message: str):
         if message:
             text = f"接続に失敗しました:\n{message}"
+            sub = "接続情報を確認し、タブを閉じて再接続してください"
         else:
             text = "接続を中止しました"
+            sub = ""
         self.message.setText(text)
-        self.message.setStyleSheet("color:#e06c75; font-size:16px;")
+        self.message.setStyleSheet(
+            f"color:{style.ERROR}; font-size:16px; font-weight:bold;")
+        self._sub.setText(sub)
         self.progress.hide()
 
 
@@ -602,14 +631,21 @@ class SessionTab(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        bar = QHBoxLayout()
-        bar.setContentsMargins(6, 4, 6, 2)
+        # 上部チップ型ツールバー(Issue #113)。表示トグル + 高頻度操作を並べる。
+        bar_w = QFrame()
+        bar_w.setObjectName("sessionToolbar")
+        bar_w.setStyleSheet(
+            f"#sessionToolbar {{ background:{style.BG};"
+            f" border-bottom:1px solid {style.BORDER}; }}")
+        bar = QHBoxLayout(bar_w)
+        bar.setContentsMargins(10, 6, 10, 6)
+        bar.setSpacing(6)
         self.bt_term = QToolButton()
-        self.bt_term.setText("ターミナル")
+        self.bt_term.setText("🖥  ターミナル")
         self.bt_term.setCheckable(True)
         self.bt_term.setChecked(True)
         self.bt_files = QToolButton()
-        self.bt_files.setText("ファイル")
+        self.bt_files.setText("📁  ファイル")
         self.bt_files.setCheckable(True)
         self.bt_files.setChecked(True)
         # モードで無効になる側のトグルは押せないようにする(#112)
@@ -627,14 +663,15 @@ class SessionTab(QWidget):
             "(Shift+右クリックのメニューからも送信できます)")
         self.bt_sendpw.clicked.connect(
             lambda: self._on_password_prompt("manual"))
-        info = QLabel(f"{session.profile.username}@{session.profile.host}:{session.profile.port}")
-        info.setStyleSheet(f"color:{style.FG_MUTED};")
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet(f"color:{style.BORDER};")
         bar.addWidget(self.bt_term)
         bar.addWidget(self.bt_files)
+        bar.addWidget(sep)
         bar.addWidget(self.bt_sendpw)
         bar.addStretch(1)
-        bar.addWidget(info)
-        root.addLayout(bar)
+        root.addWidget(bar_w)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self._logging_enabled_at_start = False
@@ -669,25 +706,37 @@ class SessionTab(QWidget):
         self.splitter.setStretchFactor(1, 2)
         root.addWidget(self.splitter, 1)
 
+        # 下部 情報ステータスバー(Issue #113): 接続先 / 暗号スイート / 文字コード /
+        # 転送状況。ネゴシエート済み暗号は接続確立後の transport から取る。
+        root.addWidget(self._build_infobar())
+
         self.bt_term.toggled.connect(self._apply_visibility)
         self.bt_files.toggled.connect(self._apply_visibility)
         if self._use_terminal and self._use_browser:
             self.browser.terminal_input.connect(self.terminal.send_text)
+        if self._use_browser:
+            self.browser.xfer.progress.connect(self._on_xfer_progress)
         if self._use_terminal:
             self.terminal.password_prompt.connect(self._on_password_prompt)
         # SFTP のみのモードではパスワード送信ボタンは意味がない
         self.bt_sendpw.setEnabled(self._use_terminal)
 
-        # トースト(通知)
+        # トースト(通知)。フェードイン/アウトでふわっと出す。
         self._toast = QLabel(self)
         self._toast.setStyleSheet(
             f"background:{style.BG_RAISED}; color:{style.FG};"
             f" border:1px solid {style.BORDER};"
             f" border-radius:{style.TOAST_RADIUS}px; padding:6px 12px;")
         self._toast.setVisible(False)
+        self._toast_fx = QGraphicsOpacityEffect(self._toast)
+        self._toast.setGraphicsEffect(self._toast_fx)
+        self._toast_anim = QPropertyAnimation(self._toast_fx, b"opacity", self)
+        self._toast_anim.setDuration(180)
+        self._toast_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self._toast_anim.finished.connect(self._on_toast_anim_done)
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
-        self._toast_timer.timeout.connect(lambda: self._toast.setVisible(False))
+        self._toast_timer.timeout.connect(self._fade_out_toast)
 
         # sudo ワンタップ送信ボタン。リモートはプロンプトを偽装できるため
         # 自動送信はしない(送る判断は常に人間)。ただしワンタップで済むようにする。
@@ -709,6 +758,47 @@ class SessionTab(QWidget):
             ch = session.open_shell()
             self.terminal.attach(ch)
             self.terminal.setFocus()
+
+    # ---- 情報ステータスバー(#113) -----------------------------------------
+    def _build_infobar(self) -> QWidget:
+        w = QFrame()
+        w.setObjectName("sessionInfoBar")
+        w.setStyleSheet(
+            f"#sessionInfoBar {{ background:{style.BG};"
+            f" border-top:1px solid {style.BORDER}; }}"
+            f"#sessionInfoBar QLabel {{ color:{style.FG_MUTED}; font-size:11px; }}")
+        h = QHBoxLayout(w)
+        h.setContentsMargins(10, 3, 10, 3)
+        h.setSpacing(14)
+        p = self.session.profile
+        mode_txt = {"both": "🖥+📁", "ssh": "🖥", "sftp": "📁"}.get(self.mode, "")
+        h.addWidget(QLabel(f"🔗 {p.username}@{p.host}:{p.port}"))
+        try:
+            cipher = self.session.security_summary()
+        except Exception:
+            cipher = ""
+        if cipher:
+            lbl = QLabel(f"🔒 {cipher}")
+            lbl.setToolTip("ネゴシエート済みの暗号スイート")
+            h.addWidget(lbl)
+        h.addWidget(QLabel("UTF-8"))
+        if mode_txt:
+            h.addWidget(QLabel(mode_txt))
+        h.addStretch(1)
+        self._xfer_label = QLabel("")
+        self._xfer_label.setStyleSheet(f"color:{style.ACCENT};")
+        h.addWidget(self._xfer_label)
+        return w
+
+    def _on_xfer_progress(self, info: dict):
+        """SFTP 転送の進捗を情報バー右端に表示する(アイドルは空)。"""
+        if not info.get("label") and info.get("total", 0) <= 1:
+            self._xfer_label.setText("")
+            return
+        done = info.get("done", 0)
+        total = max(info.get("total", 1), 1)
+        pct = min(int(done * 100 / total), 100)
+        self._xfer_label.setText(f"⇅ {info['label']}  {pct}%")
 
     # ---- パスワード自動入力 -------------------------------------------------
     def _on_password_prompt(self, kind: str):
@@ -762,13 +852,31 @@ class SessionTab(QWidget):
     def _flash(self, text: str, warn: bool = False):
         self._toast.setText(text)
         self._toast.setStyleSheet(
-            "background:%s; color:#fff; border-radius:%dpx; padding:6px 12px;"
-            % (style.DANGER_BG if warn else style.BG_RAISED, style.TOAST_RADIUS))
+            "background:%s; color:#fff; border:1px solid %s;"
+            " border-radius:%dpx; padding:6px 12px;"
+            % (style.DANGER_BG if warn else style.BG_RAISED,
+               style.ERROR if warn else style.BORDER, style.TOAST_RADIUS))
         self._toast.adjustSize()
         self._toast.move(max(12, (self.width() - self._toast.width()) // 2), 40)
         self._toast.setVisible(True)
         self._toast.raise_()
+        # フェードイン(現在の不透明度から 1.0 へ)
+        self._toast_anim.stop()
+        self._toast_anim.setStartValue(self._toast_fx.opacity())
+        self._toast_anim.setEndValue(1.0)
+        self._toast_anim.start()
         self._toast_timer.start(3500)
+
+    def _fade_out_toast(self):
+        self._toast_anim.stop()
+        self._toast_anim.setStartValue(self._toast_fx.opacity())
+        self._toast_anim.setEndValue(0.0)
+        self._toast_anim.start()
+
+    def _on_toast_anim_done(self):
+        # フェードアウト完了時だけ実際に隠す(フェードインでは何もしない)
+        if self._toast_anim.endValue() == 0.0:
+            self._toast.setVisible(False)
 
     # ---- ポートフォワード ----------------------------------------------------
     def add_tunnel(self, spec: dict) -> str:
@@ -1215,8 +1323,10 @@ class LauncherPage(QWidget):
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(8)
         title = QLabel("接続先を選択")
-        title.setStyleSheet("font-size:16px; font-weight:bold;")
+        title.setStyleSheet("font-size:18px; font-weight:bold; padding:2px 0;")
         btn_new = QPushButton("＋ 新しい接続")
+        btn_new.setProperty("primary", True)
+        btn_new.setCursor(Qt.PointingHandCursor)
         btn_new.clicked.connect(self.new_profile)
         # インクリメンタル検索(#81)。名前/ホスト/ユーザー/タグで絞り込み
         self.ed_search = QLineEdit()
@@ -1377,13 +1487,19 @@ class SessionPage(QWidget):
         self._content.setCurrentWidget(widget)
 
     def _build_reconnect_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setStyleSheet(f"background:{style.DANGER_BG};")
+        bar = QFrame()
+        bar.setObjectName("reconnectBar")
+        bar.setStyleSheet(
+            f"#reconnectBar {{ background:{style.DANGER_BG};"
+            f" border-bottom:1px solid {style.ERROR}; }}"
+            f"#reconnectBar QLabel {{ color:#ffffff; font-weight:bold; }}")
         h = QHBoxLayout(bar)
-        h.setContentsMargins(8, 4, 8, 4)
-        label = QLabel("接続が切断されました")
-        label.setStyleSheet("color:#fff; padding:2px 6px;")
-        btn = QPushButton("再接続")
+        h.setContentsMargins(12, 6, 10, 6)
+        h.setSpacing(8)
+        label = QLabel("⚠ 接続が切断されました")
+        btn = QPushButton("↻ 再接続")
+        btn.setProperty("primary", True)
+        btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip("今すぐ再接続を試みます")
         btn.clicked.connect(self._manual_reconnect)
         h.addWidget(label)

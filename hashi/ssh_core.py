@@ -440,6 +440,24 @@ class SshSession:
     def is_alive(self) -> bool:
         return bool(self.transport and self.transport.is_active())
 
+    def security_summary(self) -> str:
+        """ネゴシエート済みの暗号スイートを人間可読に返す(情報ステータスバー用)。
+
+        接続確立後の paramiko Transport から実際に選ばれた暗号 / MAC / 鍵交換を
+        まとめる。取得できないときは空文字。GCM 系は MAC を内包するので省く。
+        """
+        t = self.transport
+        if t is None or not t.is_active():
+            return ""
+        cipher = getattr(t, "remote_cipher", "") or getattr(t, "local_cipher", "")
+        if not cipher:
+            return ""
+        mac = getattr(t, "remote_mac", "") or getattr(t, "local_mac", "")
+        parts = [cipher]
+        if mac and "gcm" not in cipher.lower():
+            parts.append(mac)
+        return " / ".join(parts)
+
     def close(self) -> None:
         # エージェントフォワーディングのスレッド/ソケットを先に片付ける
         for handler in self._agent_handlers:

@@ -5,7 +5,7 @@ pyte の色名に合わせる(pyte は SGR 33 を "brown" と呼ぶため、yell
 別名として brown / brightbrown も必ず持たせる)。
 """
 
-DEFAULT_THEME = "One Half Dark"
+DEFAULT_THEME = "Hashi"
 
 _ANSI_ORDER = [
     "black", "red", "green", "yellow",
@@ -24,6 +24,18 @@ def _ansi(colors16: list[str]) -> dict[str, str]:
 
 
 THEMES: dict[str, dict] = {
+    # アプリ本体の配色(参考デザイン TransTerm)と調和する既定テーマ(#113)。
+    # 背景・前景・アクセントを hashi/style.py のパレットに合わせてある。
+    "Hashi": {
+        "foreground": "#e8e8ec", "background": "#1a1b20",
+        "cursor": "#4f8cff", "selection": "#33405e",
+        "ansi": _ansi([
+            "#2a2b33", "#e0655f", "#77c777", "#d0a050",
+            "#4f8cff", "#c678dd", "#56b6c2", "#e8e8ec",
+            "#6b6c78", "#e88a85", "#98d998", "#e5c07b",
+            "#7caaff", "#d79ae8", "#7fd4de", "#ffffff",
+        ]),
+    },
     "One Half Dark": {
         "foreground": "#dcdfe4", "background": "#1b1f27",
         "cursor": "#dcdfe4", "selection": "#3e4b63",

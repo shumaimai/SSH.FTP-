@@ -17,6 +17,19 @@ def test_all_themes_have_complete_palettes():
         assert t["ansi"]["brown"] == t["ansi"]["yellow"], name
 
 
+def test_default_theme_harmonizes_with_app_palette():
+    """既定テーマ Hashi はアプリのパレット(style)と調和させる(#113)。"""
+    from hashi import style
+
+    assert themes.DEFAULT_THEME == "Hashi"
+    t = themes.get_theme("Hashi")
+    # 前景はアプリの基本テキスト、カーソルはアクセント色に一致させる
+    assert t["foreground"].lower() == style.FG.lower()
+    assert t["cursor"].lower() == style.ACCENT.lower()
+    # 背景はアプリの暗い面と近い(暗色であること)
+    assert t["background"].startswith("#1")
+
+
 def test_get_theme_fallback():
     assert themes.get_theme("Dracula")["background"] == "#282a36"
     assert themes.get_theme("存在しないテーマ") is themes.THEMES[themes.DEFAULT_THEME]
