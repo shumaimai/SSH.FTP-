@@ -22,7 +22,8 @@ def test_palette_applied_from_style_constants(qapp):
 
 
 def test_colors_are_hex():
-    for name in ("BG", "BG_BASE", "BG_RAISED", "FG", "FG_MUTED",
+    for name in ("BG", "BG_BASE", "BG_RAISED", "PANEL", "PANEL2", "HOVER",
+                 "SEL", "DOT_OK", "FG", "FG_MUTED",
                  "FG_DISABLED", "ACCENT", "ACCENT_HOVER", "BORDER",
                  "WARN", "ERROR", "OK"):
         assert re.fullmatch(r"#[0-9a-f]{6}", getattr(style, name), re.I), name
@@ -30,9 +31,11 @@ def test_colors_are_hex():
 
 def test_chip_style_variants():
     base = style.chip_style()
-    assert "transparent" in base and style.BORDER in base
+    # 枠線なし・透明背景・ホバー塗りの柔らかいチップ(#113)
+    assert "transparent" in base and "border:none" in base
+    assert style.HOVER in base
     active = style.chip_style(active=True)
-    assert style.ACCENT in active
+    assert style.ACCENT in active and style.SEL in active
     danger = style.chip_style(active=True, danger=True)
     assert style.DANGER_BG in danger
 
@@ -41,7 +44,8 @@ def test_app_stylesheet_is_valid_qss(qapp):
     """全体 QSS が定数から作られ、主要な色を含み、% 置換が残っていない(#113)。"""
     qss = style.app_stylesheet()
     assert "%(" not in qss and "%s" not in qss   # 未置換プレースホルダが無い
-    for token in (style.ACCENT, style.BORDER, style.BG_BASE, style.FG):
+    for token in (style.ACCENT, style.BORDER, style.PANEL, style.PANEL2,
+                  style.HOVER, style.SEL, style.FG):
         assert token in qss
     # 主要ウィジェットのセレクタが含まれる
     for sel in ("QTabBar::tab", "QScrollBar", "QMenu", "QLineEdit", "QPushButton"):

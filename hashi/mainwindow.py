@@ -19,9 +19,11 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
@@ -571,8 +573,13 @@ class ConnectingWidget(QWidget):
         card = QFrame()
         card.setObjectName("connectCard")
         card.setStyleSheet(
-            f"#connectCard {{ background:{style.BG_BASE};"
+            f"#connectCard {{ background:{style.PANEL};"
             f" border:1px solid {style.BORDER}; border-radius:12px; }}")
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(48)
+        shadow.setColor(QColor(0, 0, 0, 130))
+        shadow.setOffset(0, 16)
+        card.setGraphicsEffect(shadow)
         cv = QVBoxLayout(card)
         cv.setContentsMargins(32, 26, 32, 26)
         cv.setSpacing(14)
@@ -623,6 +630,8 @@ class SessionTab(QWidget):
         self._use_browser = mode in ("both", "sftp")
         self.terminal = None
         self.browser = None
+        self._term_pane = None
+        self._browser_pane = None
         self.session_log = None
         self.tunnels: list[Forward] = []
         self._last_autofill_ts = 0.0
@@ -635,7 +644,7 @@ class SessionTab(QWidget):
         bar_w = QFrame()
         bar_w.setObjectName("sessionToolbar")
         bar_w.setStyleSheet(
-            f"#sessionToolbar {{ background:{style.BG};"
+            f"#sessionToolbar {{ background:{style.PANEL};"
             f" border-bottom:1px solid {style.BORDER}; }}")
         bar = QHBoxLayout(bar_w)
         bar.setContentsMargins(10, 6, 10, 6)
@@ -691,7 +700,8 @@ class SessionTab(QWidget):
             )
             self.terminal.set_session_log(self.session_log)
             self._logging_enabled_at_start = self.session_log.is_open()
-            self.splitter.addWidget(self.terminal)
+            self._term_pane = self._make_pane("SSH ターミナル", self.terminal)
+            self.splitter.addWidget(self._term_pane)
         if self._use_browser:
             self.browser = SftpBrowser(
                 session, session.profile.initial_path,
@@ -701,7 +711,8 @@ class SessionTab(QWidget):
                     allow_prompt=False),
                 parent=self,
             )
-            self.splitter.addWidget(self.browser)
+            self._browser_pane = self._make_pane("FTP ファイル", self.browser)
+            self.splitter.addWidget(self._browser_pane)
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 2)
         root.addWidget(self.splitter, 1)
@@ -759,12 +770,39 @@ class SessionTab(QWidget):
             self.terminal.attach(ch)
             self.terminal.setFocus()
 
+    # ---- ペインヘッダー(#113 / 参考デザイン) -------------------------------
+    def _make_pane(self, title: str, inner: QWidget) -> QWidget:
+        """ターミナル / ファイルの各ペインに、●ドット + ラベルの見出しを付けて包む。"""
+        pane = QWidget()
+        v = QVBoxLayout(pane)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        header = QFrame()
+        header.setObjectName("paneHeader")
+        header.setStyleSheet(
+            f"#paneHeader {{ background:{style.PANEL};"
+            f" border-bottom:1px solid {style.BORDER}; }}")
+        h = QHBoxLayout(header)
+        h.setContentsMargins(12, 5, 12, 5)
+        h.setSpacing(8)
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color:{style.DOT_OK}; font-size:9px;")
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            f"color:{style.FG_MUTED}; font-size:11px; font-weight:600;")
+        h.addWidget(dot)
+        h.addWidget(lbl)
+        h.addStretch(1)
+        v.addWidget(header)
+        v.addWidget(inner, 1)
+        return pane
+
     # ---- 情報ステータスバー(#113) -----------------------------------------
     def _build_infobar(self) -> QWidget:
         w = QFrame()
         w.setObjectName("sessionInfoBar")
         w.setStyleSheet(
-            f"#sessionInfoBar {{ background:{style.BG};"
+            f"#sessionInfoBar {{ background:{style.PANEL};"
             f" border-top:1px solid {style.BORDER}; }}"
             f"#sessionInfoBar QLabel {{ color:{style.FG_MUTED}; font-size:11px; }}")
         h = QHBoxLayout(w)
@@ -904,9 +942,14 @@ class SessionTab(QWidget):
             other = self.bt_files if sender is self.bt_term else self.bt_term
             if other.isEnabled():
                 other.setChecked(True)
-        if self.terminal is not None:
+        # ペインで包んでいるときは見出しごと出し入れする
+        if self._term_pane is not None:
+            self._term_pane.setVisible(self.bt_term.isChecked())
+        elif self.terminal is not None:
             self.terminal.setVisible(self.bt_term.isChecked())
-        if self.browser is not None:
+        if self._browser_pane is not None:
+            self._browser_pane.setVisible(self.bt_files.isChecked())
+        elif self.browser is not None:
             self.browser.setVisible(self.bt_files.isChecked())
 
     def toggle_session_log(self) -> bool:

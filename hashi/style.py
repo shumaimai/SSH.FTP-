@@ -13,15 +13,22 @@ from PySide6.QtWidgets import QLabel
 
 # ---- カラーパレット(参考デザイン TransTerm、Issue #111。#RRGGBB のみ) ------
 # main.py の Fusion パレットと一致させる(片方だけ変えると test_style が落ちる)。
-BG = "#1e1f24"           # ウィンドウ背景
+BG = "#1e1f24"           # ウィンドウ背景(一番奥のレイヤー)
 BG_BASE = "#191a1f"      # 入力欄・リスト背景(BG より一段暗い)
-BG_RAISED = "#2a2b33"    # ボタン・チップ・ツールチップ背景
+BG_RAISED = "#2a2b33"    # ツールチップ等の浮いた面
+# 段差のある「パネル」レイヤー(参考デザイン TransTerm)。クローム(ツールバー・
+# ヘッダー・ステータスバー)は背景より一段明るくして柔らかい奥行きを出す。
+PANEL = "#26272e"        # ツールバー・ペインヘッダー・ステータスバー
+PANEL2 = "#2d2e36"       # 入力欄・タブ列・見出し行(さらに一段明るい)
+HOVER = "#31323b"        # ボタン等のホバー塗り(枠なしで淡く光らせる)
+SEL = "#2b3450"          # 選択・トグル ON(アクセントを溶かした淡い青)
 FG = "#e8e8ec"           # 基本テキスト
 FG_MUTED = "#9a9ba6"     # 補足・注記
 FG_DISABLED = "#6b6c78"  # 無効状態・プレースホルダ
 ACCENT = "#4f8cff"       # 選択・強調・リンク・主ボタン
 ACCENT_HOVER = "#7caaff"  # アクセントのホバー
 BORDER = "#3a3b44"       # 枠線
+DOT_OK = "#58c07a"       # 接続中を示す緑ドット
 
 # セマンティックカラー(意味が決まっている色。用途外に使わない)
 WARN = "#d0a050"         # 警告(取り返しがつきにくい操作の注意書き)
@@ -51,20 +58,24 @@ CHIP_RADIUS = 6          # チップ型ボタンの角丸(参考デザイン #11
 
 
 def chip_style(active: bool = False, danger: bool = False) -> str:
-    """チップ型ボタン(参考デザインのツールバー)の QSS を返す(#111)。
+    """チップ型ボタン(参考デザインのツールバー)の QSS を返す(#111/#113)。
 
-    active=True で押下状態(アクセント枠)、danger=True で ON 時に危険背景
-    (権限無視スイッチ等)。
+    枠線は持たず、ホバーで淡く塗る柔らかい見た目。active=True で ON 状態
+    (半透明アクセント塗り + アクセント文字)、danger=True は危険背景(権限無視等)。
     """
-    bg = DANGER_BG if (active and danger) else (BG_RAISED if active else "transparent")
-    border = ACCENT if active and not danger else BORDER
+    if active and danger:
+        bg, fg = DANGER_BG, "#ffffff"
+    elif active:
+        bg, fg = SEL, ACCENT
+    else:
+        bg, fg = "transparent", FG
     return (
         "QPushButton, QToolButton {"
-        f" background:{bg}; color:{FG}; border:1px solid {border};"
-        f" border-radius:{CHIP_RADIUS}px; padding:4px 10px; font-size:12px; }}"
-        f"QPushButton:hover, QToolButton:hover {{ background:{BG_RAISED}; }}"
+        f" background:{bg}; color:{fg}; border:none;"
+        f" border-radius:{CHIP_RADIUS}px; padding:5px 10px; font-size:12px; }}"
+        f"QPushButton:hover, QToolButton:hover {{ background:{HOVER if not active else bg}; }}"
         f"QPushButton:disabled, QToolButton:disabled {{ color:{FG_DISABLED};"
-        f" border-color:{BORDER}; background:transparent; }}"
+        f" background:transparent; }}"
     )
 
 def info_chip(text: str, color: str = "") -> QLabel:
@@ -82,99 +93,101 @@ def info_chip(text: str, color: str = "") -> QLabel:
 _APP_QSS = """
 QDialog { background: %(BG)s; }
 QToolTip {
-    background: %(BG_RAISED)s; color: %(FG)s;
+    background: %(PANEL2)s; color: %(FG)s;
     border: 1px solid %(BORDER)s; border-radius: 6px; padding: 4px 8px;
 }
 
-QMenuBar { background: %(BG)s; border-bottom: 1px solid %(BORDER)s; padding: 2px 4px; }
+QMenuBar { background: %(PANEL)s; border-bottom: 1px solid %(BORDER)s; padding: 2px 4px; }
 QMenuBar::item { background: transparent; padding: 4px 10px; border-radius: 6px; }
-QMenuBar::item:selected, QMenuBar::item:pressed { background: %(BG_RAISED)s; }
-QMenu { background: %(BG_RAISED)s; border: 1px solid %(BORDER)s; border-radius: 8px; padding: 4px; }
+QMenuBar::item:selected, QMenuBar::item:pressed { background: %(HOVER)s; }
+QMenu { background: %(PANEL2)s; border: 1px solid %(BORDER)s; border-radius: 8px; padding: 4px; }
 QMenu::item { padding: 6px 20px; border-radius: 6px; }
-QMenu::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QMenu::item:selected { background: %(SEL)s; color: %(FG)s; }
 QMenu::separator { height: 1px; background: %(BORDER)s; margin: 4px 8px; }
 
 QTabWidget::pane { border: none; border-top: 1px solid %(BORDER)s; }
+QTabBar { background: transparent; }
 QTabBar::tab {
     background: transparent; color: %(FG_MUTED)s;
     padding: 7px 16px; margin-right: 2px;
-    border: 1px solid transparent;
-    border-top-left-radius: 8px; border-top-right-radius: 8px;
+    border: none; border-top-left-radius: 8px; border-top-right-radius: 8px;
 }
-QTabBar::tab:hover { background: %(BG_RAISED)s; color: %(FG)s; }
-QTabBar::tab:selected {
-    background: %(BG_BASE)s; color: %(FG)s;
-    border-color: %(BORDER)s; border-bottom-color: %(BG_BASE)s;
-}
+QTabBar::tab:hover { background: %(HOVER)s; color: %(FG)s; }
+QTabBar::tab:selected { background: %(BG)s; color: %(FG)s; }
 
 QPushButton {
-    background: %(BG_RAISED)s; color: %(FG)s;
-    border: 1px solid %(BORDER)s; border-radius: %(R)spx;
-    padding: 6px 14px;
+    background: %(PANEL2)s; color: %(FG)s;
+    border: none; border-radius: %(R)spx; padding: 7px 15px;
 }
-QPushButton:hover { border-color: %(ACCENT)s; }
-QPushButton:pressed { background: %(BG)s; }
-QPushButton:disabled { color: %(FG_DISABLED)s; background: transparent; border-color: %(BORDER)s; }
+QPushButton:hover { background: %(HOVER)s; }
+QPushButton:pressed { background: %(PANEL)s; }
+QPushButton:disabled { color: %(FG_DISABLED)s; background: %(PANEL)s; }
 QPushButton[primary="true"], QPushButton:default {
-    background: %(ACCENT)s; color: #ffffff; border: none; font-weight: bold;
+    background: %(ACCENT)s; color: #ffffff; border: none; font-weight: 600;
 }
 QPushButton[primary="true"]:hover, QPushButton:default:hover { background: %(ACCENT_HOVER)s; }
 QPushButton[primary="true"]:disabled, QPushButton:default:disabled {
-    background: %(BG_RAISED)s; color: %(FG_DISABLED)s;
+    background: %(PANEL2)s; color: %(FG_DISABLED)s;
 }
 
 QToolButton {
     background: transparent; color: %(FG)s;
-    border: 1px solid transparent; border-radius: %(R)spx; padding: 5px 9px;
+    border: none; border-radius: %(R)spx; padding: 5px 9px;
 }
-QToolButton:hover { background: %(BG_RAISED)s; }
-QToolButton:checked { background: %(BG_RAISED)s; border-color: %(ACCENT)s; }
+QToolButton:hover { background: %(HOVER)s; }
+QToolButton:checked { background: %(SEL)s; color: %(ACCENT)s; }
 QToolButton:disabled { color: %(FG_DISABLED)s; }
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {
-    background: %(BG_BASE)s; color: %(FG)s;
+    background: %(PANEL2)s; color: %(FG)s;
     border: 1px solid %(BORDER)s; border-radius: %(R)spx;
-    padding: 5px 8px; selection-background-color: %(ACCENT)s;
+    padding: 6px 9px; selection-background-color: %(ACCENT)s;
     selection-color: #ffffff;
 }
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
 QSpinBox:focus, QComboBox:focus { border-color: %(ACCENT)s; }
 QComboBox::drop-down { border: none; width: 20px; }
+QComboBox QAbstractItemView {
+    background: %(PANEL2)s; border: 1px solid %(BORDER)s;
+    selection-background-color: %(SEL)s; selection-color: %(FG)s; outline: none;
+}
 
 QListWidget, QTreeWidget, QTreeView, QListView {
-    background: %(BG_BASE)s; border: 1px solid %(BORDER)s; border-radius: 8px;
+    background: %(BG)s; border: 1px solid %(BORDER)s; border-radius: 8px;
     outline: none;
 }
-QListWidget::item { padding: 6px 8px; border-radius: 6px; }
-QListWidget::item:hover { background: %(BG_RAISED)s; }
-QListWidget::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QListWidget::item { padding: 7px 9px; border-radius: 6px; }
+QListWidget::item:hover, QTreeView::item:hover,
+QListView::item:hover, QTreeWidget::item:hover { background: %(HOVER)s; }
+QListWidget::item:selected { background: %(SEL)s; color: %(FG)s; }
 QTreeView::item:selected, QListView::item:selected,
-QTreeWidget::item:selected { background: %(ACCENT)s; color: #ffffff; }
+QTreeWidget::item:selected { background: %(SEL)s; color: %(FG)s; }
 QHeaderView::section {
-    background: %(BG)s; color: %(FG_MUTED)s;
-    border: none; border-bottom: 1px solid %(BORDER)s; padding: 5px 8px;
+    background: %(PANEL2)s; color: %(FG_MUTED)s;
+    border: none; border-bottom: 1px solid %(BORDER)s;
+    border-right: 1px solid %(BORDER)s; padding: 6px 8px;
 }
 
-QScrollBar:vertical { background: transparent; width: 11px; margin: 0; }
-QScrollBar::handle:vertical { background: %(BORDER)s; border-radius: 5px; min-height: 32px; margin: 2px; }
-QScrollBar::handle:vertical:hover { background: %(FG_DISABLED)s; }
-QScrollBar:horizontal { background: transparent; height: 11px; margin: 0; }
-QScrollBar::handle:horizontal { background: %(BORDER)s; border-radius: 5px; min-width: 32px; margin: 2px; }
-QScrollBar::handle:horizontal:hover { background: %(FG_DISABLED)s; }
+QScrollBar:vertical { background: transparent; width: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: %(HOVER)s; border-radius: 5px; min-height: 34px; margin: 3px; }
+QScrollBar::handle:vertical:hover { background: %(BORDER)s; }
+QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; }
+QScrollBar::handle:horizontal { background: %(HOVER)s; border-radius: 5px; min-width: 34px; margin: 3px; }
+QScrollBar::handle:horizontal:hover { background: %(BORDER)s; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
-QStatusBar { background: %(BG)s; border-top: 1px solid %(BORDER)s; color: %(FG_MUTED)s; }
+QStatusBar { background: %(PANEL)s; border-top: 1px solid %(BORDER)s; color: %(FG_MUTED)s; }
 QStatusBar::item { border: none; }
 QSplitter::handle { background: %(BORDER)s; }
 QSplitter::handle:horizontal { width: 1px; }
 QSplitter::handle:vertical { height: 1px; }
 
 QProgressBar {
-    background: %(BG_BASE)s; border: 1px solid %(BORDER)s; border-radius: 6px;
+    background: %(PANEL2)s; border: none; border-radius: 7px;
     text-align: center; color: %(FG)s; height: 14px;
 }
-QProgressBar::chunk { background: %(ACCENT)s; border-radius: 5px; }
+QProgressBar::chunk { background: %(ACCENT)s; border-radius: 7px; }
 
 QGroupBox {
     border: 1px solid %(BORDER)s; border-radius: 8px;
@@ -189,6 +202,7 @@ def app_stylesheet() -> str:
     """アプリ全体へ適用する QSS を返す(Issue #113)。色は必ず定数から。"""
     return _APP_QSS % {
         "BG": BG, "BG_BASE": BG_BASE, "BG_RAISED": BG_RAISED,
+        "PANEL": PANEL, "PANEL2": PANEL2, "HOVER": HOVER, "SEL": SEL,
         "FG": FG, "FG_MUTED": FG_MUTED, "FG_DISABLED": FG_DISABLED,
         "ACCENT": ACCENT, "ACCENT_HOVER": ACCENT_HOVER, "BORDER": BORDER,
         "R": CHIP_RADIUS,
