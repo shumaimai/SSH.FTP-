@@ -1338,6 +1338,12 @@ class LauncherPage(QWidget):
         self.list.itemDoubleClicked.connect(self._connect_item)
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._profile_menu)
+        # 空状態のプレースホルダ(#113)。接続先ゼロ / 検索一致なしで出す。
+        self._empty = QLabel()
+        self._empty.setAlignment(Qt.AlignCenter)
+        self._empty.setWordWrap(True)
+        self._empty.setStyleSheet(f"color:{style.FG_MUTED}; font-size:13px;")
+        self._empty.setVisible(False)
         hint = QLabel("ダブルクリックで接続(新しいタブが開きます)\n"
                       "右クリックでモード選択 / 編集 / 削除")
         hint.setStyleSheet(f"color:{style.FG_MUTED};")
@@ -1345,6 +1351,7 @@ class LauncherPage(QWidget):
         v.addWidget(btn_new)
         v.addWidget(self.ed_search)
         v.addWidget(self.list, 1)
+        v.addWidget(self._empty, 1)
         v.addWidget(hint)
         self._reload_list()
 
@@ -1362,6 +1369,18 @@ class LauncherPage(QWidget):
             item.setData(Qt.UserRole, idx)   # 検索/ソートでズレない実 index
             item.setToolTip(f"{p.username}@{p.host}:{p.port} ({p.auth_method})")
             self.list.addItem(item)
+        # 空状態の出し分け(接続先ゼロ / 検索一致なし)
+        empty = self.list.count() == 0
+        if empty:
+            if self.store.profiles and query:
+                self._empty.setText(
+                    f"🔍「{query}」に一致する接続先がありません")
+            else:
+                self._empty.setText(
+                    "まだ接続先がありません。\n"
+                    "上の「＋ 新しい接続」から最初のサーバーを追加しましょう。")
+        self.list.setVisible(not empty)
+        self._empty.setVisible(empty)
 
     def _selected_store_index(self) -> int:
         item = self.list.currentItem()

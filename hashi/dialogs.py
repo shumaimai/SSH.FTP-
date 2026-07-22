@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -87,17 +88,55 @@ class DoubleCheckDialog(QDialog):
         return dlg.exec() == QDialog.Accepted
 
 
+class ThemePreview(QFrame):
+    """配色テーマの小さなプレビュー(#113)。設定ダイアログで選択に追従する。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(84)
+        mono = QFont()
+        mono.setFamilies(["Consolas", "Menlo", "Monospace"])
+        self._label = QLabel(self)
+        self._label.setFont(mono)
+        self._label.setTextFormat(Qt.RichText)
+        self._label.setTextInteractionFlags(Qt.NoTextInteraction)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.addWidget(self._label)
+
+    def set_theme(self, name: str):
+        from . import themes
+        t = themes.get_theme(name)
+        a, fg, bg = t["ansi"], t["foreground"], t["background"]
+        self.setStyleSheet(
+            f"ThemePreview {{ background:{bg}; border:1px solid {style.BORDER};"
+            f" border-radius:6px; }}")
+
+        def s(color: str, text: str) -> str:
+            return f"<span style='color:{color};'>{text}</span>"
+
+        self._label.setText(
+            s(a["blue"], "deploy@web01") + s(fg, ":") + s(a["cyan"], "~/app")
+            + s(fg, "$ ls --color") + "<br>"
+            + s(a["green"], "deploy.sh") + s(fg, "&nbsp;&nbsp;")
+            + s(fg, "README.md") + s(fg, "&nbsp;&nbsp;") + s(a["red"], "error.log")
+            + "<br>" + s(a["magenta"], "sudo") + s(fg, " systemctl restart app")
+        )
+
+
 class HostKeyDialog(QDialog):
     """ホスト鍵の受け入れ確認。鍵変更(mismatch)時は強い警告を出す。"""
 
     def __init__(self, parent, info: dict):
         super().__init__(parent)
         self.setModal(True)
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(style.DIALOG_M)
         mismatch = info.get("status") == "mismatch"
         self.setWindowTitle("ホスト鍵の変更を検出" if mismatch else "初めて接続するホストです")
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(12)
         if mismatch:
             warn = QLabel(
                 f"<b style='color:{style.ERROR}; font-size:14px;'>"
@@ -122,7 +161,8 @@ class HostKeyDialog(QDialog):
         fp.setFont(mono)
         fp.setTextInteractionFlags(Qt.TextSelectableByMouse)
         fp.setStyleSheet(
-            f"padding:8px; background:{style.BG_RAISED}; border-radius:4px;")
+            f"padding:10px; background:{style.BG_BASE};"
+            f" border:1px solid {style.BORDER}; border-radius:6px;")
         lay.addWidget(fp)
 
         if mismatch and info.get("old_fingerprint"):
@@ -165,10 +205,16 @@ class SecretDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("認証")
         self.setModal(True)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(style.DIALOG_S)
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(10)
+        header = QLabel("🔒 認証情報の入力")
+        header.setStyleSheet("font-size:14px; font-weight:bold;")
+        lay.addWidget(header)
         lb = QLabel(prompt)
         lb.setWordWrap(True)
+        lb.setStyleSheet(f"color:{style.FG_MUTED};")
         lay.addWidget(lb)
         self.edit = QLineEdit()
         self.edit.setEchoMode(QLineEdit.Password)
@@ -929,6 +975,10 @@ class SettingsDialog(QDialog):
         idx_theme = self.cb_theme.findText(
             settings.get("terminal_theme") or _themes.DEFAULT_THEME)
         self.cb_theme.setCurrentIndex(max(0, idx_theme))
+        # テーマのプレビュー(#113)。選択に追従する。
+        self.theme_preview = ThemePreview()
+        self.theme_preview.set_theme(self.cb_theme.currentText())
+        self.cb_theme.currentTextChanged.connect(self.theme_preview.set_theme)
         self.cb_tfont_family = QComboBox()
         self.cb_tfont_family.setEditable(True)
         self.cb_tfont_family.addItem("(既定の等幅フォント)", "")
@@ -971,6 +1021,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.chk_session_log)
         form.addRow("ログ保存先", log_row)
         form.addRow("ターミナル配色テーマ", self.cb_theme)
+        form.addRow("", self.theme_preview)
         form.addRow("ターミナルフォント", self.cb_tfont_family)
         form.addRow("ターミナル文字サイズ", self.sp_tfont)
         form.addRow("エディタ文字サイズ", self.sp_efont)

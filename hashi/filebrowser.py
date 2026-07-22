@@ -864,10 +864,11 @@ class SftpBrowser(QWidget):
         qstyle = self.style()
 
         def icon_button(tip, slot, icon):
-            b = QPushButton()
+            # 上部ツールバーはセッションのチップ列と見た目を揃える(#113)。
+            # QToolButton は全体 QSS で透明背景 + hover 背景 + 角丸になる。
+            b = QToolButton()
             b.setToolTip(tip)
             b.setIcon(qstyle.standardIcon(icon))
-            b.setFixedWidth(34)
             b.clicked.connect(slot)
             return b
 

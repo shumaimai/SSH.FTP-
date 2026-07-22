@@ -22,6 +22,25 @@ def _select_auth(dialog, auth_method):
     dialog.cb_auth.setCurrentIndex(dialog.cb_auth.findData(auth_method))
 
 
+def test_theme_preview_follows_selection(qapp, tmp_path):
+    """設定のテーマプレビューが選択に追従し、背景色をテーマから取る(#113)。"""
+    import pathlib
+
+    from hashi import themes
+    from hashi.config import Settings
+    from hashi.dialogs import SettingsDialog
+
+    st = Settings(pathlib.Path(tmp_path) / "s.json")
+    dlg = SettingsDialog(st)
+    # 初期プレビューは現在のテーマ背景を含む
+    cur = dlg.cb_theme.currentText()
+    assert themes.get_theme(cur)["background"] in dlg.theme_preview.styleSheet()
+    # 別テーマへ切り替えるとプレビューが追従
+    dlg.cb_theme.setCurrentText("Dracula")
+    assert "#282a36" in dlg.theme_preview.styleSheet()
+    dlg.deleteLater()
+
+
 def test_password_auth_replaces_key_fields(qapp):
     dialog = ConnectDialog(profile=Profile(auth_method=AUTH_PASSWORD))
 

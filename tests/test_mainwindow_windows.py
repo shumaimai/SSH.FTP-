@@ -88,6 +88,23 @@ def test_import_refreshes_launcher_list(app_win):
     assert any("new" in name or "x@new" in name for name in labels)
 
 
+def test_launcher_empty_state(app_win):
+    """接続先ゼロ / 検索一致なしで空状態プレースホルダを出す(#113)。"""
+    lp = app_win.launcher
+    lp.store.profiles.clear()
+    lp._reload_list()
+    assert lp._empty.isVisibleTo(lp) and not lp.list.isVisibleTo(lp)
+    assert "まだ接続先がありません" in lp._empty.text()
+
+    lp.store.profiles.append(Profile(name="srv", host="h", username="u"))
+    lp._reload_list()
+    assert lp.list.isVisibleTo(lp) and not lp._empty.isVisibleTo(lp)
+
+    lp.ed_search.setText("該当しないはず")
+    assert lp._empty.isVisibleTo(lp)
+    assert "一致する接続先がありません" in lp._empty.text()
+
+
 class _FakeSFTP:
     def listdir_attr(self, path="."): return []
     def normalize(self, path): return path or "/home/u"
